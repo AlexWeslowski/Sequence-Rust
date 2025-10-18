@@ -32,13 +32,17 @@ use std::clone::Clone;
 use std::collections::{BTreeSet, HashSet};
 use std::cmp::min;
 use std::env;
+use std::fs::OpenOptions;
 use std::hash::Hash;
+use std::io::{self, Write};
 use std::slice::Iter;
 use std::thread;
 use std::time::{Duration, Instant};
 use std::str;
 use std::sync::{Arc, Mutex, RwLock};
-use std::sync::atomic::{AtomicI8, AtomicI32, AtomicI64, AtomicU32};
+use std::sync::atomic::{AtomicI8, AtomicI32, AtomicI64, AtomicU32, Ordering};
+use std::sync::mpsc;
+use std::sync::mpsc::{Sender};
 
 
 /*
@@ -46,6 +50,12 @@ lazy_static! {
     static ref Seq: Sequence = Sequence::new(2, 11457600, false);
 }
 */
+
+struct Message {
+	n: u32,
+	ratio: Ratio<i32>,
+	msg: String
+}	
 
 #[derive(Copy, Clone)]
 struct RatioVec {
@@ -72,6 +82,7 @@ struct Main {
     afinish: AtomicU32,
     matches: Vec<Ratio<i32>>,
     predefined: HashMap<u32, RatioVec, RandomState>,
+	tx: Sender<Option<Message>>,
 }
 
 
@@ -166,6 +177,7 @@ pub fn print_duration(&mut self, seq: &Sequence, mut n: u32, mut icount: u32)
     //println!("divisors.keys.len() = {}, divisors.values.len() = {}", seq.divisors.lock().unwrap().len().0.separate_with_commas(), seq.divisors.lock().unwrap().len().1.separate_with_commas());
 }
 
+#[function_name::named]
 pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut seq: Sequence)
 {
     /*
@@ -174,7 +186,7 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
     seq.bln_divisors = false;
     seq.set_primes(&primes);
     */
-    
+
     let nstepby: u32 = if self.matches.len() == 1 && *self.matches[0].denom() == 2 { 2 } else { 1 };
     if nstart % nstepby > 0 
     {
@@ -185,8 +197,10 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
     }*/
     let ihundreds: u32 = 100;
     let ithousands: u32 = 1000000;
-    for n in (nstart..nfinish + nstepby).step_by(nstepby as usize)
+	let mut n: u32 = if nstepby > nstart { 0 } else { nstart - nstepby };
+	while n <= nfinish
     {
+		n += nstepby;
         if (n / nstepby) % inumthreads != self.ithread
         {
             continue;
@@ -196,10 +210,13 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
             // 1/2    3, 7, 8     168
             // 1/2    3, 5, 16    240
             2 | 12 | 168 | 240 |
-            3 | 378 | 480 | 504 | 540 | 600 | 660 | 720 | 840 | 936 | 1260 | 1320 | 1404 | 1980 |
+            3 | 24 | 30 | 36 | 378 | 480 | 504 | 540 | 600 | 660 | 720 | 840 | 936 | 1260 | 1320 | 1404 | 1980 |
             4 | 48 | 56 | 864 | 1344 | 1512 | 1680 | 1824 | 1920 | 2240 | 2496 | 3024 | 3840 | 4032 | 4480 | 4960 | 5280 | 6720 | 8640 | 9120 | 11520 | 21760 => {
                 if !self.matches.iter().find(|&x| *x == self.predefined[&n].ratio).is_none() {
-                    println!("{}", self.predefined[&n].to_string());
+					let msg: String = self.predefined[&n].to_string();
+					//println!("{} line {}", function_name!(), line!());
+	                //println!("{}", msg);
+					self.tx.send(Some(Message { n: n, ratio: self.predefined[&n].ratio, msg: msg }));
                 }
             },
             _ => {
@@ -214,7 +231,10 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
                             let vec: String = Itertools::join(&mut this_combination.iter(), ", ");
                             // .to_string().as_bytes().rchunks(3).rev().map(str::from_utf8).collect::<Result<Vec<&str>, _>>().unwrap().join(",");
                             let num: String = n.separate_with_commas();
-                            println!("{}    {}    [{}]", ratio, num, vec);
+							let msg: String = format!("{}    {}    [{}]", ratio, num, vec);
+							//println!("{} line {}", function_name!(), line!());
+                            //println!("{}", msg);
+							self.tx.send(Some(Message { n: n, ratio: *ratio, msg: msg }));
                         }
                         prev_combination = this_combination;
                     }
@@ -226,6 +246,11 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
             },
         }
     }
+	//println!("n = {}", n);
+	//println!("afinish = {}", self.afinish.load(Ordering::SeqCst));
+	//if n >= self.afinish.load(Ordering::SeqCst) {
+	self.tx.send(None);
+	//}
 }
 }
 
@@ -10194,36 +10219,48 @@ const PREDEFINED: &str = include_str!("predefined.txt");
  * target\debug\sequence_rust 2 3 2 1024
  * target/debug/sequence_rust 2 2 65536
  * target/debug/sequence_rust 2 2 4408320
- * target\release\sequence_rust 2 3 2 65536
+ * target\release\sequence_rust 2 2 2 65536
  * target/release/sequence_rust 1 2 4408320
  * target/release/sequence_rust 1 2 39621120 (2^25.2)
  * target\release\sequence_rust 1 2 4194304 268435456
  * 
+ * target\release\sequence_rust.exe 4 "[(1,2), (1,3)]" 2 4194304
+ * 
  */
+
+#[function_name::named]
 fn main() 
 {
     let args: Vec<String> = env::args().collect();
     let t1: Instant = Instant::now();
     let inumthreads: u8 = args[1].parse::<u8>().ok().unwrap();
-    let iratio: u8 = args[2].parse::<u8>().ok().unwrap();
+    let mut strratios1: String = args[2].clone();
+	strratios1 = strratios1.replace("[", "").replace("]", "").replace(" ", "");
     let istart: u32 = args[3].parse::<u32>().ok().unwrap();
     let ifinish: u32 = args[4].parse::<u32>().ok().unwrap();
     
     //let vecratios1: Vec<Ratio<i32>> = (iratio..=iratio).map(|x| Ratio::<i32>::new(1, x as i32)).collect();
     let mut vecratios1: Vec<Ratio<i32>> = Vec::new();
-    vecratios1.push(Ratio::<i32>::new(1, 2));
-    vecratios1.push(Ratio::<i32>::new(1, 3));
-    vecratios1.push(Ratio::<i32>::new(2, 3));
-    vecratios1.push(Ratio::<i32>::new(1, 4));
-    vecratios1.push(Ratio::<i32>::new(3, 4));
-    vecratios1.push(Ratio::<i32>::new(1, 5));
-    vecratios1.push(Ratio::<i32>::new(2, 5));
-    vecratios1.push(Ratio::<i32>::new(3, 5));
-    vecratios1.push(Ratio::<i32>::new(4, 5));
-    //let mut setprimes1: Arc<BTreeSet<i64>> = Arc::new(init(ifinish.ilog2() + 1));
+	let tuples: Vec<&str> = strratios1.split("),(").collect();
+	for tuple1 in tuples {
+		let tuple2 = tuple1.replace("(", "").replace(")", "");
+		let parts: Vec<&str> = tuple2.split(",").collect();
+		vecratios1.push(Ratio::<i32>::new(parts[0].parse::<i32>().ok().unwrap(), parts[1].parse::<i32>().ok().unwrap()));
+	}
+	let filename: String = format!("sequence {}.txt", strratios1.replace("),(", ") ("));
+	// vecratios1.push(Ratio::<i32>::new(1, 2));
+    // vecratios1.push(Ratio::<i32>::new(1, 3));
+    // vecratios1.push(Ratio::<i32>::new(2, 3));
+    // vecratios1.push(Ratio::<i32>::new(1, 4));
+    // vecratios1.push(Ratio::<i32>::new(3, 4));
+    // vecratios1.push(Ratio::<i32>::new(1, 5));
+    // vecratios1.push(Ratio::<i32>::new(2, 5));
+    // vecratios1.push(Ratio::<i32>::new(3, 5));
+    // vecratios1.push(Ratio::<i32>::new(4, 5));
+    // let mut setprimes1: Arc<BTreeSet<i64>> = Arc::new(init(ifinish.ilog2() + 1));
     let mut vecprimes1: Arc<Vec<u32>> = Arc::new(init(ifinish as u32));
     
-    //new(i: u32, capacity: usize, global: bool, resize: bool)
+    // new(i: u32, capacity: usize, global: bool, resize: bool)
     let mut seq1: Sequence = Sequence::new(ifinish as usize, false, false);
     seq1.bln_factors = true;
     seq1.bln_divisors = false;
@@ -10281,8 +10318,9 @@ fn main()
     //test_divisors(vecprimes1.clone());
     //return;
     
-    println!("starting with num_threads={}, istart={}, ifinish={}", inumthreads, istart, ifinish);
+    println!("starting with num_threads={}, vec_ratios=[{}], istart={}, ifinish={}, file_name={}", inumthreads, strratios1.replace(" ", ""), istart, ifinish, filename);
     
+	let (tx1, rx1) = mpsc::channel::<Option<Message>>();
     thread::scope(|scp| 
     {
         let mut threads = vec![];
@@ -10298,6 +10336,8 @@ fn main()
             //let vecprimes2: Arc<Vec<u32>> = Arc::clone(&vecprimes1);
             let vecratios2: Vec<Ratio<i32>> = vecratios1.clone();
             let predefined2: HashMap<u32, RatioVec, RandomState> = predefined1.clone();
+			let tx2 = tx1.clone();
+			//println!("{}() line {}", function_name!(), line!());
             threads.push(scp.spawn(move || {
                 let mut m = Main { 
                     ithread: ith as u32,
@@ -10307,10 +10347,50 @@ fn main()
                     afinish: AtomicU32::new(ifinish), 
                     matches: vecratios2,
                     predefined: predefined2,
+					tx: tx2,
                 };
                 m.do_work(istart, ifinish, inumthreads as u32, seq2);
+				//println!("{}() line {} thread {}", function_name!(), line!(), ith);
             }));
         }
+		
+		//let rx2 = rx1.clone();
+		//let rx2 = Arc::new(Mutex::new(rx1));
+		threads.push(scp.spawn(move || {
+			let mut messages: Vec<Message> = Vec::new();
+			let mut file = OpenOptions::new().create(true).append(true).open(filename).unwrap();
+			let mut ithread = 0;
+			//println!("{}() line {}", function_name!(), line!());
+			for msg in rx1.iter() {
+				//println!("{}() line {}", function_name!(), line!());
+				if msg.is_none() {
+					ithread += 1;
+					if ithread >= inumthreads {
+						println!("ithread = {}, inumthreads = {}", ithread, inumthreads);
+						break;
+					}
+				} else {
+					messages.push(msg.unwrap());
+					//println!("{}() messages.len() = {}", function_name!(), messages.len());
+					if messages.len() >= 72 {
+						messages.sort_by_key(|msg| (msg.n, *msg.ratio.denom()));
+						let messages_drain: Vec<Message> = messages.drain(..36).collect();
+						for msg in messages_drain {
+							println!("{}", msg.msg);
+							writeln!(file, "{}", msg.msg);
+						}
+					}
+				}
+			}
+			if messages.len() > 0 {
+				messages.sort_by_key(|msg| (msg.n, *msg.ratio.denom()));
+				for msg in messages {
+					println!("{}", msg.msg);
+					writeln!(file, "{}", msg.msg);
+				}
+			}
+        }));
+		
         // 
         // https://stackoverflow.com/questions/68966949/unable-to-join-threads-from-joinhandles-stored-in-a-vector-rust
         // 
@@ -10318,6 +10398,7 @@ fn main()
         {
             let _ = th.join();
         }
+		
     });
     let sec = t1.elapsed().as_secs_f64();
     let min = sec/60.0;
