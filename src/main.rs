@@ -10238,14 +10238,20 @@ fn main()
 	strratios1 = strratios1.replace("[", "").replace("]", "").replace(" ", "");
     let istart: u32 = args[3].parse::<u32>().ok().unwrap();
     let ifinish: u32 = args[4].parse::<u32>().ok().unwrap();
-    
+    let mut iminfactors: usize = 4;
+	
     //let vecratios1: Vec<Ratio<i32>> = (iratio..=iratio).map(|x| Ratio::<i32>::new(1, x as i32)).collect();
     let mut vecratios1: Vec<Ratio<i32>> = Vec::new();
 	let tuples: Vec<&str> = strratios1.split("),(").collect();
 	for tuple1 in tuples {
 		let tuple2 = tuple1.replace("(", "").replace(")", "");
 		let parts: Vec<&str> = tuple2.split(",").collect();
-		vecratios1.push(Ratio::<i32>::new(parts[0].parse::<i32>().ok().unwrap(), parts[1].parse::<i32>().ok().unwrap()));
+		let num: i32 = parts[0].parse::<i32>().ok().unwrap();
+		let den: i32 = parts[1].parse::<i32>().ok().unwrap();
+		vecratios1.push(Ratio::<i32>::new(num, den));
+		if den > 4 || num > 1 {
+			iminfactors = 2;
+		}
 	}
 	let filename: String = format!("sequence {}.txt", strratios1.replace("),(", ") ("));
 	// vecratios1.push(Ratio::<i32>::new(1, 2));
@@ -10327,6 +10333,7 @@ fn main()
         for ith in 0..(inumthreads as usize)
         {
             let mut seq2: Sequence = Sequence::new(seq1.capacity, seq1.global, seq1.resize);
+			seq2.min_factors_len = iminfactors;
             seq2.bln_factors = seq1.bln_factors;
             seq2.bln_divisors = seq1.bln_divisors;
             seq2.bitprimes = seq1.bitprimes.clone();
