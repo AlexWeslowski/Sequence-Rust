@@ -81,7 +81,7 @@ struct Main {
     astart: AtomicU32,
     afinish: AtomicU32,
     matches: Vec<Ratio<i32>>,
-    predefined: HashMap<u32, RatioVec, RandomState>,
+    predefined: HashMap<u32, Vec<RatioVec>, RandomState>,
 	tx: Sender<Option<Message>>,
 }
 
@@ -177,6 +177,27 @@ pub fn print_duration(&mut self, seq: &Sequence, mut n: u32, mut icount: u32)
     //println!("divisors.keys.len() = {}, divisors.values.len() = {}", seq.divisors.lock().unwrap().len().0.separate_with_commas(), seq.divisors.lock().unwrap().len().1.separate_with_commas());
 }
 
+/*
+nstart, nfinish, nstepby, pow10 = 2, 65536, 1, 10000
+for inumthreads in range(2, 8 + 1):
+	minhsh = {}
+	nums = []
+	for ithread in range(0, inumthreads):
+		n = nstart - nstepby
+		while n < nfinish:
+			n += nstepby
+			if ((n - nstart) / nstepby) % inumthreads != ithread:
+				continue
+			nums.append(n)
+			if (n - nstart - ithread) % pow10 < minhsh.get(ithread, 2**32):
+				minhsh[ithread] = (n - nstart - ithread) % pow10
+			if (n - nstart - ithread) % pow10 < inumthreads:
+				print(f"ithread = {ithread}, n % inumthreads = {n % inumthreads}, n - nstart - ithread = {n - nstart - ithread}, {n - nstart - ithread} % pow10 = {(n - nstart - ithread) % pow10}")
+	#print(f"inumthreads = {inumthreads}, nums = {sorted(nums)}")
+	print(f"inumthreads = {inumthreads}, minhsh = {minhsh}")
+	if len(nums) != nfinish - nstart + 1 or sorted(nums) != list(range(nstart, nfinish+1)):
+		break
+*/
 #[function_name::named]
 pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut seq: Sequence)
 {
@@ -198,10 +219,10 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
     let ihundreds: u32 = 100;
     let ithousands: u32 = 1000000;
 	let mut n: u32 = if nstepby > nstart { 0 } else { nstart - nstepby };
-	while n <= nfinish
+	while n < nfinish
     {
 		n += nstepby;
-        if (n / nstepby) % inumthreads != self.ithread
+        if ((n - nstart) / nstepby) % inumthreads != self.ithread
         {
             continue;
         }
@@ -212,11 +233,13 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
             2 | 12 | 168 | 240 |
             3 | 24 | 30 | 36 | 378 | 480 | 504 | 540 | 600 | 660 | 720 | 840 | 936 | 1260 | 1320 | 1404 | 1980 |
             4 | 48 | 56 | 864 | 1344 | 1512 | 1680 | 1824 | 1920 | 2240 | 2496 | 3024 | 3840 | 4032 | 4480 | 4960 | 5280 | 6720 | 8640 | 9120 | 11520 | 21760 => {
-                if !self.matches.iter().find(|&x| *x == self.predefined[&n].ratio).is_none() {
-					let msg: String = self.predefined[&n].to_string();
-					//println!("{} line {}", function_name!(), line!());
-	                //println!("{}", msg);
-					self.tx.send(Some(Message { n: n, ratio: self.predefined[&n].ratio, msg: msg }));
+                if !self.matches.iter().find(|&x| *x == self.predefined[&n][0].ratio).is_none() {
+					for ratiovec in &self.predefined[&n] {
+						let msg: String = ratiovec.to_string();
+						//println!("{} line {}", function_name!(), line!());
+						//println!("{}", msg);
+						self.tx.send(Some(Message { n: n, ratio: ratiovec.ratio, msg: msg }));
+					}
                 }
             },
             _ => {
@@ -239,7 +262,7 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
                         prev_combination = this_combination;
                     }
                 }
-                if (n - nstart) % ithousands == self.ithread
+                if (n - nstart - self.ithread) % ithousands == 0
                 {
                     self.print_duration(&seq, n, n - nstart);   
                 }                
@@ -10272,7 +10295,7 @@ fn main()
     seq1.bln_divisors = false;
     seq1.set_primes(&vecprimes1);
 
-    let mut predefined1: HashMap<u32, RatioVec, RandomState> = HashMap::with_hasher(RandomState::new());
+    let mut predefined1: HashMap<u32, Vec<RatioVec>, RandomState> = HashMap::with_hasher(RandomState::new());
     // 12 | 168 | 240 | 378 | 480 | 504 | 540 | 600 | 660 | 720 | 840 | 936 | 1,260 | 1,320 | 1,404 | 1,980
     // 1/2    12    [3, 4]
     // 1/2    168    [3, 7, 8]
@@ -10309,7 +10332,9 @@ fn main()
         while vars2.len() < 10 {
             vars2.push(0);
         }
-        predefined1.insert(vars1u, RatioVec{ n: vars1i, ratio: Ratio::<i32>::new(1, vars0), slice: vars2.try_into().unwrap() });
+		//predefined1.insert(vars1u, RatioVec{ n: vars1i, ratio: Ratio::<i32>::new(1, vars0), slice: vars2.try_into().unwrap() });
+		//predefined1.entry(vars1u).or_default().insert(vars1u, );
+		predefined1.entry(vars1u).or_insert_with(Vec::new).push(RatioVec{ n: vars1i, ratio: Ratio::<i32>::new(1, vars0), slice: vars2.try_into().unwrap() });
     }
     /*
     let mut seq = Sequence::new(1049520, 1049520, true);
@@ -10324,6 +10349,19 @@ fn main()
     //test_divisors(vecprimes1.clone());
     //return;
     
+	/*
+	seq1.min_factors_len = 2;
+	for n in [720, 840] {
+		for this_combination in seq1.factor_combinations(n as u32) {
+			let this_density: Ratio<i32> = seq.calc_density(&this_combination.iter().map(|&x| x as i32).collect());                    
+            if let Some(this_ratio) = vecratios1.iter().find(|&x| *x == this_density) {
+				println!("{} {} {:?}", this_ratio, n, this_combination);
+			}
+		}
+	}
+	seq1.min_factors_len = 4;
+	*/
+	
     println!("starting with num_threads={}, vec_ratios=[{}], istart={}, ifinish={}, file_name={}", inumthreads, strratios1.replace(" ", ""), istart, ifinish, filename);
     
 	let (tx1, rx1) = mpsc::channel::<Option<Message>>();
@@ -10342,7 +10380,7 @@ fn main()
             seq2.divisors = Arc::clone(&seq1.divisors);
             //let vecprimes2: Arc<Vec<u32>> = Arc::clone(&vecprimes1);
             let vecratios2: Vec<Ratio<i32>> = vecratios1.clone();
-            let predefined2: HashMap<u32, RatioVec, RandomState> = predefined1.clone();
+            let predefined2: HashMap<u32, Vec<RatioVec>, RandomState> = predefined1.clone();
 			let tx2 = tx1.clone();
 			//println!("{}() line {}", function_name!(), line!());
             threads.push(scp.spawn(move || {
