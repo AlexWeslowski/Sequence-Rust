@@ -2,7 +2,7 @@
 name = "sequence_rust"
 version = "1.0.0"
 authors = ["Axel West"]
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 ahash = "0.8.11"
@@ -10,6 +10,7 @@ ahash = "0.8.11"
 bit-vec = "0.8.0"
 bit-vec_serde = "0.6.0"
 cached = "0.43.0"
+clap = { version = "4.5.50", features = ["derive"] }
 cmov = "0.3.1"
 crossbeam = "0.8.4"
 crossbeam-skiplist = "0.1.3"

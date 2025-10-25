@@ -204,8 +204,10 @@ pub fn new(capacity: usize, global: bool, resize: bool) -> Self
 
 pub fn set_primes(&mut self, arc_primes: &Arc<Vec<u32>>) 
 {
+	//self.bitprimes = FixedBitSet::with_capacity(self.capacity + 1);
     //self.bitprimes = FixedBitSet::with_capacity((primes[primes.len() - 1] + 1) as usize);
-    for &p in arc_primes.iter() {
+    //for &p in primes.iter() {
+	for &p in arc_primes.iter() {
         self.bitprimes.insert(p as usize);
     }
     
@@ -214,6 +216,7 @@ pub fn set_primes(&mut self, arc_primes: &Arc<Vec<u32>>)
         return;
     }
     //let vec_primes: Vec<u32> = Arc::try_unwrap(arc_primes).unwrap_or_else(|arc| (*arc).clone());
+    //*VecPrimes.lock().unwrap() = primes;
     *VecPrimes.lock().unwrap() = (*arc_primes).to_vec();
     *bln = true;
     self.init();

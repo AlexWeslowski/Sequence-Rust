@@ -17,6 +17,7 @@ mod sequence2;
 
 use ahash::{RandomState};
 use bit_vec::BitVec;
+use clap::{Parser, Subcommand};
 use fixedbitset::FixedBitSet;
 use flurry::HashSet as FlurryHashSet;
 use hashbrown::HashMap;
@@ -69,12 +70,13 @@ impl RatioVec {
     fn to_string(self) -> String {        
         //let s = Itertools::join(&mut self.slice.iter(), ", ");
         //let s: String = self.slice.iter().filter(|&&x| x != 0).map(|&x| x.to_string()).collect::<Vec<String>>().join(",");
-        let s = Itertools::join(&mut self.slice.iter().filter(|&&x| x != 0), ", ");
-        return format!("{}    {}    [{}]", self.ratio, self.n.separate_with_commas(), s);
+        let mut v: Vec<i32> = self.slice.iter().filter(|&&x| x != 0).cloned().collect();
+        return format!("{}    {}    [{}]    {}", self.ratio, self.n.separate_with_commas(), v.clone().into_iter().join(", "), v.len());
     }
 }
 
 struct Main {
+	debug: bool,
     ithread: u32,
     anumthreads: AtomicU32,
     t1: Instant,
@@ -82,7 +84,7 @@ struct Main {
     afinish: AtomicU32,
     matches: Vec<Ratio<i32>>,
     predefined: HashMap<u32, Vec<RatioVec>, RandomState>,
-	tx: Sender<Option<Message>>,
+	tx: Option<Sender<Option<Message>>>,
 }
 
 
@@ -219,6 +221,7 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
     let ihundreds: u32 = 100;
     let ithousands: u32 = 1000000;
 	let mut n: u32 = if nstepby > nstart { 0 } else { nstart - nstepby };
+	let mut nvec: Vec<u32> = Vec::new();
 	while n < nfinish
     {
 		n += nstepby;
@@ -226,6 +229,9 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
         {
             continue;
         }
+		if self.debug {
+			nvec.push(n);
+		}
         match n {
             // 1/2    3, 4         12
             // 1/2    3, 7, 8     168
@@ -233,12 +239,19 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
             2 | 12 | 168 | 240 |
             3 | 24 | 30 | 36 | 378 | 480 | 504 | 540 | 600 | 660 | 720 | 840 | 936 | 1260 | 1320 | 1404 | 1980 |
             4 | 48 | 56 | 864 | 1344 | 1512 | 1680 | 1824 | 1920 | 2240 | 2496 | 3024 | 3840 | 4032 | 4480 | 4960 | 5280 | 6720 | 8640 | 9120 | 11520 | 21760 => {
-                if !self.matches.iter().find(|&x| *x == self.predefined[&n][0].ratio).is_none() {
+                if !self.matches.iter().find(|&m| self.predefined[&n].iter().any(|p| p.ratio == *m)).is_none() {
 					for ratiovec in &self.predefined[&n] {
+                        if self.matches.iter().find(|&m| *m == ratiovec.ratio).is_none() {
+                            continue;
+                        }
 						let msg: String = ratiovec.to_string();
 						//println!("{} line {}", function_name!(), line!());
-						//println!("{}", msg);
-						self.tx.send(Some(Message { n: n, ratio: ratiovec.ratio, msg: msg }));
+						if inumthreads == 1 {
+							println!("{}", msg);
+						}
+						if let Some(tx) = &self.tx {
+							tx.send(Some(Message { n: n, ratio: ratiovec.ratio, msg: msg }));
+						}
 					}
                 }
             },
@@ -252,12 +265,15 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
                         if let Some(ratio) = self.matches.iter().find(|&x| *x == density)
                         {
                             let vec: String = Itertools::join(&mut this_combination.iter(), ", ");
-                            // .to_string().as_bytes().rchunks(3).rev().map(str::from_utf8).collect::<Result<Vec<&str>, _>>().unwrap().join(",");
                             let num: String = n.separate_with_commas();
-							let msg: String = format!("{}    {}    [{}]", ratio, num, vec);
+							let msg: String = format!("{}    {}    [{}]    {}", ratio, num, vec, this_combination.len());
 							//println!("{} line {}", function_name!(), line!());
-                            //println!("{}", msg);
-							self.tx.send(Some(Message { n: n, ratio: *ratio, msg: msg }));
+                            if inumthreads == 1 {
+								println!("{}", msg);
+							}
+							if let Some(tx) = &self.tx {
+								tx.send(Some(Message { n: n, ratio: *ratio, msg: msg }));
+							}
                         }
                         prev_combination = this_combination;
                     }
@@ -269,11 +285,16 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
             },
         }
     }
-	//println!("n = {}", n);
-	//println!("afinish = {}", self.afinish.load(Ordering::SeqCst));
-	//if n >= self.afinish.load(Ordering::SeqCst) {
-	self.tx.send(None);
-	//}
+	
+	if self.debug {
+		println!("n = {}", n);
+		println!("afinish = {}", self.afinish.load(Ordering::SeqCst));
+        println!("nvec.len() = {}, {} - {} + 1 = {}", nvec.len(), nvec[nvec.len()-1], nvec[0], nvec[nvec.len()-1] - nvec[0] + 1);
+		println!("nvec = {:?}", nvec);
+	}
+	if let Some(tx) = &self.tx {
+		tx.send(None);
+	}
 }
 }
 
@@ -10233,6 +10254,28 @@ finished from 2 to 4194304 with 2 threads in 787.61 minutes (13.13 hours)
 */
 
 
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    #[arg(index = 1)]
+    numthreads: u8,
+    #[arg(index = 2)]
+    ratios: String,
+    #[arg(index = 3)]
+    start: u32,
+    #[arg(index = 4)]
+    finish: u32,
+    #[arg(short, long, default_value_t = false)]
+    verbose: bool,
+    #[arg(short, long, default_value_t = false)]
+    debug: bool,
+    #[arg(short, long, default_value_t = false)]
+    file: bool,
+    #[arg(short='p', long)]
+    filepath: Option<String>,
+}
+
+
 const PREDEFINED: &str = include_str!("predefined.txt");
 
 /*
@@ -10247,20 +10290,32 @@ const PREDEFINED: &str = include_str!("predefined.txt");
  * target/release/sequence_rust 1 2 39621120 (2^25.2)
  * target\release\sequence_rust 1 2 4194304 268435456
  * 
+ * target\release\sequence_rust.exe 4 "[(1,2), (1,3)]" 2 128
+ * target\release\sequence_rust.exe 4 "[(1,2)]" 2 1048576 --file
  * target\release\sequence_rust.exe 4 "[(1,2), (1,3)]" 2 4194304
+ * 
+ * [(1,3)] from 2 to 4194304 with 4 threads in 4299.5 minutes (71.66 hours)
+ * [(1,2)] from 2 to 1048576 with 4 threads in  182.4 minutes ( 3.04 hours)
  * 
  */
 
 #[function_name::named]
 fn main() 
 {
-    let args: Vec<String> = env::args().collect();
+    let vecargs: Vec<String> = env::args().collect();
+    let mut args = Args::parse();
+    if let Some(fp) = args.filepath.clone().filter(|fp| fp.len() > 0) {
+        args.file = true;
+    }
+    if args.debug {
+        println!("{:#?}", args);
+    }
     let t1: Instant = Instant::now();
-    let inumthreads: u8 = args[1].parse::<u8>().ok().unwrap();
-    let mut strratios1: String = args[2].clone();
+    let inumthreads: u8 = vecargs[1].parse::<u8>().ok().unwrap();
+    let mut strratios1: String = vecargs[2].clone();
 	strratios1 = strratios1.replace("[", "").replace("]", "").replace(" ", "");
-    let istart: u32 = args[3].parse::<u32>().ok().unwrap();
-    let ifinish: u32 = args[4].parse::<u32>().ok().unwrap();
+    let istart: u32 = vecargs[3].parse::<u32>().ok().unwrap();
+    let ifinish: u32 = vecargs[4].parse::<u32>().ok().unwrap();
     let mut iminfactors: usize = 4;
 	
     //let vecratios1: Vec<Ratio<i32>> = (iratio..=iratio).map(|x| Ratio::<i32>::new(1, x as i32)).collect();
@@ -10276,7 +10331,10 @@ fn main()
 			iminfactors = 2;
 		}
 	}
-	let filename: String = format!("sequence {}.txt", strratios1.replace("),(", ") ("));
+    
+    if args.filepath.is_none() {
+        args.filepath = Some(format!("sequence {}.txt", strratios1.replace("),(", ") (")));
+    }
 	// vecratios1.push(Ratio::<i32>::new(1, 2));
     // vecratios1.push(Ratio::<i32>::new(1, 3));
     // vecratios1.push(Ratio::<i32>::new(2, 3));
@@ -10290,32 +10348,12 @@ fn main()
     let mut vecprimes1: Arc<Vec<u32>> = Arc::new(init(ifinish as u32));
     
     // new(i: u32, capacity: usize, global: bool, resize: bool)
-    let mut seq1: Sequence = Sequence::new(ifinish as usize, false, false);
+    let mut seq1: Sequence = Sequence::new(std::cmp::max(ifinish as usize, 8192), false, false);
     seq1.bln_factors = true;
     seq1.bln_divisors = false;
     seq1.set_primes(&vecprimes1);
 
     let mut predefined1: HashMap<u32, Vec<RatioVec>, RandomState> = HashMap::with_hasher(RandomState::new());
-    // 12 | 168 | 240 | 378 | 480 | 504 | 540 | 600 | 660 | 720 | 840 | 936 | 1,260 | 1,320 | 1,404 | 1,980
-    // 1/2    12    [3, 4]
-    // 1/2    168    [3, 7, 8]
-    // 1/2    240    [3, 5, 16]
-    // 1/3    378    [6, 7, 9]
-    // 1/3    480    [5, 8, 12]
-    // 1/3    504    [7, 8, 9]
-    // 1/3    540    [5, 9, 12]
-    // 1/3    600    [4, 10, 15]
-    // 1/3    660    [5, 11, 12]
-    // 1/3    720    [5, 8, 18]
-    // 1/3    720    [5, 9, 16]
-    // 1/3    840    [4, 14, 15]
-    // 1/3    840    [4, 10, 21]
-    // 1/3    840    [5, 8, 21]
-    // 1/3    936    [4, 13, 18]
-    // 1/3    1,260    [5, 7, 36]
-    // 1/3    1,320    [4, 11, 30]
-    // 1/3    1,404    [4, 13, 27]
-    // 1/3    1,980    [4, 11, 45]
     for line in PREDEFINED.lines() {
         let mut vars: Vec<&str> = line.split("    ").collect();
         if !vars[0].contains('/') {
@@ -10333,7 +10371,6 @@ fn main()
             vars2.push(0);
         }
 		//predefined1.insert(vars1u, RatioVec{ n: vars1i, ratio: Ratio::<i32>::new(1, vars0), slice: vars2.try_into().unwrap() });
-		//predefined1.entry(vars1u).or_default().insert(vars1u, );
 		predefined1.entry(vars1u).or_insert_with(Vec::new).push(RatioVec{ n: vars1i, ratio: Ratio::<i32>::new(1, vars0), slice: vars2.try_into().unwrap() });
     }
     /*
@@ -10349,79 +10386,52 @@ fn main()
     //test_divisors(vecprimes1.clone());
     //return;
     
-	/*
-	seq1.min_factors_len = 2;
-	for n in [720, 840] {
-		for this_combination in seq1.factor_combinations(n as u32) {
-			let this_density: Ratio<i32> = seq.calc_density(&this_combination.iter().map(|&x| x as i32).collect());                    
-            if let Some(this_ratio) = vecratios1.iter().find(|&x| *x == this_density) {
-				println!("{} {} {:?}", this_ratio, n, this_combination);
+	if false {
+		seq1.min_factors_len = 2;
+		for n in [720, 840, 6720] {
+			for this_combination in seq1.factor_combinations(n as u32) {
+				let this_density: Ratio<i32> = seq1.calc_density(&this_combination.iter().map(|&x| x as i32).collect());                    
+				//if let Some(this_ratio) = vecratios1.iter().find(|&x| *x == this_density) {
+				if *this_density.denom() <= 3 {
+					println!("{} {} {:?}", this_density, n, this_combination);
+				}
 			}
 		}
-	}
-	seq1.min_factors_len = 4;
-	*/
+		seq1.min_factors_len = 4;
+	}	
 	
-    println!("starting with num_threads={}, vec_ratios=[{}], istart={}, ifinish={}, file_name={}", inumthreads, strratios1.replace(" ", ""), istart, ifinish, filename);
+    println!("main() num_threads={}, vec_ratios=[{}], istart={}, ifinish={}", inumthreads, strratios1.replace(" ", ""), istart, ifinish);
+    println!("main() debug={}, file={}{}", args.debug, args.file, if args.file && let Some(ref fp) = args.filepath { format!(", file_path={}", fp) } else { "".to_string() });
     
-	let (tx1, rx1) = mpsc::channel::<Option<Message>>();
-    thread::scope(|scp| 
-    {
-        let mut threads = vec![];
-        for ith in 0..(inumthreads as usize)
-        {
-            let mut seq2: Sequence = Sequence::new(seq1.capacity, seq1.global, seq1.resize);
-			seq2.min_factors_len = iminfactors;
-            seq2.bln_factors = seq1.bln_factors;
-            seq2.bln_divisors = seq1.bln_divisors;
-            seq2.bitprimes = seq1.bitprimes.clone();
-            seq2.factors = Arc::clone(&seq1.factors);
-            seq2.factor_slices = Arc::clone(&seq1.factor_slices);
-            seq2.divisors = Arc::clone(&seq1.divisors);
-            //let vecprimes2: Arc<Vec<u32>> = Arc::clone(&vecprimes1);
-            let vecratios2: Vec<Ratio<i32>> = vecratios1.clone();
-            let predefined2: HashMap<u32, Vec<RatioVec>, RandomState> = predefined1.clone();
-			let tx2 = tx1.clone();
-			//println!("{}() line {}", function_name!(), line!());
-            threads.push(scp.spawn(move || {
-                let mut m = Main { 
-                    ithread: ith as u32,
-                    t1: t1, 
-                    anumthreads: AtomicU32::new(inumthreads as u32), 
-                    astart: AtomicU32::new(istart), 
-                    afinish: AtomicU32::new(ifinish), 
-                    matches: vecratios2,
-                    predefined: predefined2,
-					tx: tx2,
-                };
-                m.do_work(istart, ifinish, inumthreads as u32, seq2);
-				//println!("{}() line {} thread {}", function_name!(), line!(), ith);
-            }));
-        }
+	if true {
 		
-		//let rx2 = rx1.clone();
-		//let rx2 = Arc::new(Mutex::new(rx1));
-		threads.push(scp.spawn(move || {
+		let (tx1, rx1) = mpsc::channel::<Option<Message>>();
+		let mut m = Main { 
+			debug: args.debug,
+			ithread: 0,
+			t1: t1, 
+			anumthreads: AtomicU32::new(inumthreads as u32), 
+			astart: AtomicU32::new(istart), 
+			afinish: AtomicU32::new(ifinish), 
+			matches: vecratios1,
+			predefined: predefined1,
+			tx: if args.file { Some(tx1) } else { None },
+		};
+		m.do_work(istart, ifinish, 1, seq1);
+		
+		if args.file {
 			let mut messages: Vec<Message> = Vec::new();
-			let mut file = OpenOptions::new().create(true).append(true).open(filename).unwrap();
-			let mut ithread = 0;
-			//println!("{}() line {}", function_name!(), line!());
+			let mut file = OpenOptions::new().create(true).append(true).open(args.filepath.unwrap()).unwrap();
 			for msg in rx1.iter() {
-				//println!("{}() line {}", function_name!(), line!());
 				if msg.is_none() {
-					ithread += 1;
-					if ithread >= inumthreads {
-						println!("ithread = {}, inumthreads = {}", ithread, inumthreads);
-						break;
-					}
+					break;
 				} else {
 					messages.push(msg.unwrap());
-					//println!("{}() messages.len() = {}", function_name!(), messages.len());
 					if messages.len() >= 72 {
 						messages.sort_by_key(|msg| (msg.n, *msg.ratio.denom()));
 						let messages_drain: Vec<Message> = messages.drain(..36).collect();
 						for msg in messages_drain {
-							println!("{}", msg.msg);
+							//println!("{}", msg.msg);
 							writeln!(file, "{}", msg.msg);
 						}
 					}
@@ -10430,28 +10440,107 @@ fn main()
 			if messages.len() > 0 {
 				messages.sort_by_key(|msg| (msg.n, *msg.ratio.denom()));
 				for msg in messages {
-					println!("{}", msg.msg);
+					//println!("{}", msg.msg);
 					writeln!(file, "{}", msg.msg);
 				}
 			}
-        }));
-		
-        // 
-        // https://stackoverflow.com/questions/68966949/unable-to-join-threads-from-joinhandles-stored-in-a-vector-rust
-        // 
-        for th in threads 
-        {
-            let _ = th.join();
-        }
-		
-    });
+		}
+	} else {
+	
+		let (tx1, rx1) = mpsc::channel::<Option<Message>>();
+		thread::scope(|scp| 
+		{
+			let mut threads = vec![];
+			for ith in 0..(inumthreads as usize)
+			{
+				let mut seq2: Sequence = Sequence::new(seq1.capacity, seq1.global, seq1.resize);
+				seq2.min_factors_len = iminfactors;
+				seq2.bln_factors = seq1.bln_factors;
+				seq2.bln_divisors = seq1.bln_divisors;
+				seq2.bitprimes = seq1.bitprimes.clone();
+				seq2.factors = Arc::clone(&seq1.factors);
+				seq2.factor_slices = Arc::clone(&seq1.factor_slices);
+				seq2.divisors = Arc::clone(&seq1.divisors);
+				//let vecprimes2: Arc<Vec<u32>> = Arc::clone(&vecprimes1);
+				let vecratios2: Vec<Ratio<i32>> = vecratios1.clone();
+				let predefined2: HashMap<u32, Vec<RatioVec>, RandomState> = predefined1.clone();
+				let tx2 = tx1.clone();
+				//println!("{}() line {}", function_name!(), line!());
+				threads.push(scp.spawn(move || {
+					let mut m = Main { 
+						debug: args.debug,
+						ithread: ith as u32,
+						t1: t1, 
+						anumthreads: AtomicU32::new(inumthreads as u32), 
+						astart: AtomicU32::new(istart), 
+						afinish: AtomicU32::new(ifinish), 
+						matches: vecratios2,
+						predefined: predefined2,
+                        tx: if args.file { Some(tx2) } else { None },
+					};
+					m.do_work(istart, ifinish, inumthreads as u32, seq2);
+					//println!("{}() line {} thread {}", function_name!(), line!(), ith);
+				}));
+			}
+			
+			//let rx2 = rx1.clone();
+			//let rx2 = Arc::new(Mutex::new(rx1));
+			threads.push(scp.spawn(move || {
+				let mut messages: Vec<Message> = Vec::new();
+				let mut file: Option<std::fs::File> = if args.file { Some(OpenOptions::new().create(true).append(true).open(args.filepath.unwrap()).unwrap()) } else { None };
+				let mut ithread = 0;
+				//println!("{}() line {}", function_name!(), line!());
+				for msg in rx1.iter() {
+					//println!("{}() line {}", function_name!(), line!());
+					if msg.is_none() {
+						ithread += 1;
+						if ithread >= inumthreads {
+							println!("ithread = {}, inumthreads = {}", ithread, inumthreads);
+							break;
+						}
+					} else {
+						messages.push(msg.unwrap());
+						//println!("{}() messages.len() = {}", function_name!(), messages.len());
+						if messages.len() >= 72 {
+							messages.sort_by_key(|msg| (msg.n, *msg.ratio.denom()));
+							let messages_drain: Vec<Message> = messages.drain(..36).collect();
+							for msg in messages_drain {
+								println!("{}", msg.msg);
+                                if args.file && let Some(ref mut f) = file {
+                                    writeln!(f, "{}", msg.msg);
+                                }
+							}
+						}
+					}
+				}
+				if messages.len() > 0 {
+					messages.sort_by_key(|msg| (msg.n, *msg.ratio.denom()));
+					for msg in messages {
+						println!("{}", msg.msg);
+                        if args.file && let Some(ref mut f) = file {
+                            writeln!(f, "{}", msg.msg);
+                        }
+					}
+				}
+			}));
+			
+			// 
+			// https://stackoverflow.com/questions/68966949/unable-to-join-threads-from-joinhandles-stored-in-a-vector-rust
+			// 
+			for th in threads 
+			{
+				let _ = th.join();
+			}
+			
+		});
+	}
     let sec = t1.elapsed().as_secs_f64();
     let min = sec/60.0;
     let hrs = min/60.0;
     // 1 thread ... 0.70 minutes ... 10.05 minutes
     // 2 threads .. 0.41 minutes .... 6.77 minutes
     // 4 threads .. 0.38 minutes
-    println!("finished from {} to {} with {} threads in {:.2} minutes ({:.2} hours)", istart, ifinish, inumthreads, min, hrs);
+    println!("finished from {} to {} with {} threads in {:.1} minutes ({:.2} hours)", istart, ifinish, inumthreads, min, hrs);
 }
 
 
