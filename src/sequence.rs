@@ -217,7 +217,8 @@ pub fn set_primes(&mut self, arc_primes: &Arc<Vec<u32>>)
     }
     //let vec_primes: Vec<u32> = Arc::try_unwrap(arc_primes).unwrap_or_else(|arc| (*arc).clone());
     //*VecPrimes.lock().unwrap() = primes;
-    *VecPrimes.lock().unwrap() = (*arc_primes).to_vec();
+	let sqrt = (arc_primes.len() as f64).sqrt() + 1 as usize;
+    *VecPrimes.lock().unwrap() = (*arc_primes[0..sqrt]).to_vec();
     *bln = true;
     self.init();
 }
