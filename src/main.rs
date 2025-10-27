@@ -280,7 +280,7 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
                 }
                 if (n - nstart - self.ithread) % ithousands == 0
                 {
-                    self.print_duration(&seq, n, n - nstart);   
+                    self.print_duration(&seq, n, (n - nstart)/inumthreads);   
                 }                
             },
         }
@@ -10297,6 +10297,10 @@ const PREDEFINED: &str = include_str!("predefined.txt");
  * [(1,3)] from 2 to 4194304 with 4 threads in 4299.5 minutes (71.66 hours)
  * [(1,2)] from 2 to 1048576 with 4 threads in  182.4 minutes ( 3.04 hours)
  * 
+ * [(1,2)] (1,000,000) 28.5 mins ~ 35,108 per min
+ * [(1,2)] from 2 to 1048576 with 1 thread  in   30.7 minutes ( 0.51 hours)
+ * [(1,2)] from 2 to 1048576 with 4 threads in   27.6 minutes ( 0.46 hours)
+ * 
  */
 
 #[function_name::named]
@@ -10403,7 +10407,7 @@ fn main()
     println!("main() num_threads={}, vec_ratios=[{}], istart={}, ifinish={}", inumthreads, strratios1.replace(" ", ""), istart, ifinish);
     println!("main() debug={}, file={}{}", args.debug, args.file, if args.file && let Some(ref fp) = args.filepath { format!(", file_path={}", fp) } else { "".to_string() });
     
-	if true {
+	if inumthreads == 1 {
 		
 		let (tx1, rx1) = mpsc::channel::<Option<Message>>();
 		let mut m = Main { 
