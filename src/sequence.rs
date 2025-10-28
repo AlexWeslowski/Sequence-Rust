@@ -1,5 +1,6 @@
 #![allow(unused_imports)]
 
+extern crate divisors;
 extern crate flurry;
 extern crate num;
 extern crate primes;
@@ -17,6 +18,8 @@ use lazy_static::lazy_static;
 use num::integer::lcm;
 use num::rational::Ratio;
 use num::rational::Rational64;
+use num_primes::Factorization as NumPrimesFactorization;
+use prime_factorization::Factorization as PrimeFactorization;
 use primes::{Sieve, PrimeSet};
 // use seize::collector::Guard;
 use std::cmp::{max, min};
@@ -25,6 +28,7 @@ use std::result::Result;
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use thousands::Separable;
+use time_graph_macros::instrument;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Factor {
@@ -196,6 +200,7 @@ pub fn new(capacity: usize, global: bool, resize: bool) -> Self
         exhaustive_search: false,
         global: global,
         resize: resize,
+        bln_gt_half: false,
         bln_divisors: false,
         bln_factors: false,
         bln_factor_slices: false,
@@ -217,8 +222,8 @@ pub fn set_primes(&mut self, arc_primes: &Arc<Vec<u32>>)
     }
     //let vec_primes: Vec<u32> = Arc::try_unwrap(arc_primes).unwrap_or_else(|arc| (*arc).clone());
     //*VecPrimes.lock().unwrap() = primes;
-	let sqrt = (arc_primes.len() as f64).sqrt() + 1 as usize;
-    *VecPrimes.lock().unwrap() = (*arc_primes[0..sqrt]).to_vec();
+	let isqrt = arc_primes.len().isqrt();
+    *VecPrimes.lock().unwrap() = arc_primes[0..isqrt].to_vec();
     *bln = true;
     self.init();
 }
@@ -230,6 +235,7 @@ pub fn init(&mut self)
         return;
     }
     let icapacity = self.capacity as u32;
+    let isqrtcapacity = icapacity.isqrt();
     /*
     if VecPrimes.lock().unwrap().len() <= 1
     {
@@ -259,7 +265,7 @@ pub fn init(&mut self)
         for j in 0..len {
             let p2 = VecPrimes.lock().unwrap()[j];
             let iproduct = p1 * p2;
-            if iproduct > icapacity {
+            if iproduct > isqrtcapacity {
                 break;
             } else {
                 //divisors2_vec[0] = 1;
@@ -287,7 +293,7 @@ pub fn init(&mut self)
             for k in 0..len {
                 let p3 = VecPrimes.lock().unwrap()[k];
                 let iproduct = p1 * p2 * p3;
-                if iproduct > icapacity {
+                if iproduct > isqrtcapacity {
                     break;
                 } else {
                     //divisors3_vec[0] = 1;
@@ -333,15 +339,15 @@ pub fn init(&mut self)
     *bln = true;
 }
 
-
+#[instrument]
 pub fn backtrack(&mut self, n: u32, istart: u32, itarget: u32, mut factors: Vec<u32>)
 {
     if itarget == 1 
     {
         if (factors.len() >= self.min_factors_len && factors.len() <= self.max_factors_len) 
         {
-            factors.sort();
-            if (factors[0] != 2 && factors[0] != factors[1])
+            factors.sort_unstable();
+            if (self.bln_gt_half || factors[0] != 2) && factors[0] != factors[1]
             {
                 let mut bappend: bool = true;
                 let mut j: usize = factors.len();
@@ -381,22 +387,33 @@ pub fn backtrack(&mut self, n: u32, istart: u32, itarget: u32, mut factors: Vec<
         //let bprint: bool = true;
         //let bprint: bool = itarget == 24 * 4373 || itarget == 1049520;
         if self.exhaustive_search {
-            for i in istart..(itarget + 1) {
+            let mut i = istart;
+            while i * i <= itarget {
                 if itarget % i == 0 {
-                    factors.push(i); 
+                    factors.push(i);
                     //if bprint { println!("n = {}, istart = {}, itarget = {}, i = {}, factors = {:?}", n, istart, itarget, i, factors); }
                     self.backtrack(n, i, itarget / i, factors.clone());
                     factors.pop();
                 }
+                i += 1;
             }
         } else {
             let mut vecdivisors: Vec<u32> = self.divisor_gen(itarget, vec![]);
-            vecdivisors.sort();
-            vecdivisors.push(itarget);
-            for d in vecdivisors {
-                factors.push(d);
-                //if bprint { println!("n = {}, istart = {}, itarget = {}, d = {}, factors = {:?}", n, istart, itarget, d, factors); }
-                self.backtrack(n, d, itarget / d, factors.clone());
+            vecdivisors.sort_unstable();
+            if false {
+                vecdivisors.push(itarget);
+            }
+            for div in vecdivisors {
+                if div != vecdivisors[vecdivisors.len() - 1] {
+                    factors.push(div);
+                    //if bprint { println!("n = {}, istart = {}, itarget = {}, div = {}, factors = {:?}", n, istart, itarget, div, factors); }
+                    self.backtrack(n, div, itarget / div, factors.clone());
+                    factors.pop();
+                }
+            }
+            if true {
+                factors.push(itarget);
+                self.backtrack(n, itarget, 1, factors.clone());
                 factors.pop();
             }
         }
@@ -408,12 +425,13 @@ n = 1049520, vecvec1 = [[5, 6, 8, 4373], [3, 8, 10, 4373], [12, 20, 4373], [5, 1
 n = 1049520, setvec2 = {[10, 24, 4373], [3, 40, 8746], [8, 15, 8746], [3, 20, 17492], [15, 16, 4373], [4, 6, 10, 4373], [5, 24, 8746], [3, 5, 69968], [8, 30, 4373], [10, 12, 8746], [5, 48, 4373], [3, 5, 16, 4373], [5, 6, 34984], [6, 20, 8746], [5, 12, 17492], [3, 8, 10, 4373], [8, 10, 13119], [6, 8, 21865], [3, 4, 10, 8746], [4, 6, 43730], [6, 10, 17492], [12, 20, 4373], [3, 16, 21865], [4, 5, 6, 8746], [5, 6, 8, 4373], [3, 10, 34984], [5, 8, 26238], [3, 5, 8, 8746], [6, 40, 4373], [3, 80, 4373], [3, 8, 43730], [4, 10, 26238], [5, 16, 13119], [4, 30, 8746]}, factors2 = [2, 2, 2, 2, 3, 5, 4373]
  */
 
-pub fn factor_combinations(&mut self, i: u32) -> Vec<Vec<u32>>
+#[instrument]
+pub fn factor_combinations(&mut self, i: u32) -> &Vec<Vec<u32>>
 {
     self.combinations.clear();
     let mut factors: Vec<u32> = Vec::<u32>::new();
     self.backtrack(i, 2, i, factors.clone());
-    return self.combinations.clone();
+    return &self.combinations.clone();
 }
 
 
@@ -436,6 +454,7 @@ pub fn print_capacity(&self) {
     println!("divisors.keys.len() = {}, divisors.values.len() = {}", keys_len.separate_with_commas(), values_len.separate_with_commas());
 }
 
+#[instrument]
 pub fn factor_slice(&mut self, mut n: u32) -> Vec<u32> {
     if unsafe { self.bitprimes.contains_unchecked(n as usize) } {
         return vec![n];
@@ -496,6 +515,7 @@ pub fn factor_slice(&mut self, mut n: u32) -> Vec<u32> {
     }
 }
 
+#[instrument]
 fn factor_gen(&mut self, mut n: u32) -> Vec<Factor> {
     if unsafe { self.bitprimes.contains_unchecked(n as usize) } {
         return vec![Factor { i: n, exp: 1 }];
@@ -507,6 +527,20 @@ fn factor_gen(&mut self, mut n: u32) -> Vec<Factor> {
             return aryfactors.to_vec();
         }
     }
+    // from 2 to 1048576 with 4 threads in 102.3 minutes (1.70 hours)
+    
+    let mut rtn: Vec<Factor> = Vec::new();
+    let mut len: usize = 0;
+    for p in PrimeFactorization::run(n).factors {
+        if len == 0 || rtn[len - 1].i != p {
+            rtn.push(Factor { i: p, exp: 1 });
+            len += 1;
+        } else {
+            rtn[len - 1].exp += 1;
+        }
+    }
+    return rtn;
+    /*
     let mut rtn: Vec<Factor> = Vec::new();
     let un = n as u32;
     let mut bbreak: bool = false;
@@ -564,12 +598,16 @@ fn factor_gen(&mut self, mut n: u32) -> Vec<Factor> {
     } else {
         return rtn;
     }
+    */
 }
 
+#[instrument]
 pub fn divisor_gen(&mut self, n: u32, factors1: Vec<Factor>) -> Vec<u32> {
     if self.bitprimes[n as usize] {
         return vec![];
-    }
+    }    
+    return divisors::get_divisors(n);
+    /*
     {
         let mut divisors = if self.global { Divisors.lock().unwrap() } else { self.divisors.lock().unwrap() };
         if divisors.contains_key(n as u32) {
@@ -615,10 +653,13 @@ pub fn divisor_gen(&mut self, n: u32, factors1: Vec<Factor>) -> Vec<u32> {
             }
         }
     }
+    */
 }
 
 fn lcm(&self, i: i32, j: i32) -> i32
 {
+    return num::integer::lcm(i, j);
+    /*
     let mut map = if self.global { LcmMap.lock().unwrap() } else { self.lcm_map.lock().unwrap() };
     if (map.contains_key(&(i, j))) {
         return map[&(i, j)];
@@ -627,6 +668,7 @@ fn lcm(&self, i: i32, j: i32) -> i32
         if map.capacity() < LcmMapCapacity.load(Ordering::Relaxed) { map.insert((i, j), k); }
         return k;
     }
+    */
 }
 
 fn mult(&mut self, mut ary: Vec<i32>) -> i32
@@ -655,6 +697,7 @@ fn mult(&mut self, mut ary: Vec<i32>) -> i32
     return ary[ilen - 1];
 }
 
+#[instrument]
 pub fn calc_density(&mut self, a: &Vec<i32>) -> Ratio<i32>
 {
         let ilen: usize = a.len();

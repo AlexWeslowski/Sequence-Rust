@@ -17,6 +17,7 @@ mod sequence2;
 
 use ahash::{RandomState};
 use bit_vec::BitVec;
+use chrono::{Local, Timelike};
 use clap::{Parser, Subcommand};
 use fixedbitset::FixedBitSet;
 use flurry::HashSet as FlurryHashSet;
@@ -25,9 +26,11 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use num::rational::{Ratio, Rational32, Rational64};
 use primes::{PrimeSet, Sieve};
+use raw_cpuid::CpuId;
 use sequence::Sequence;
 use shared_memory::*;
 use thousands::Separable;
+use time_graph;
 
 use std::clone::Clone;
 use std::collections::{BTreeSet, HashSet};
@@ -36,6 +39,7 @@ use std::env;
 use std::fs::OpenOptions;
 use std::hash::Hash;
 use std::io::{self, Write};
+use std::process::Command;
 use std::slice::Iter;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -10270,6 +10274,8 @@ struct Args {
     #[arg(short, long, default_value_t = false)]
     debug: bool,
     #[arg(short, long, default_value_t = false)]
+    perf: bool,
+    #[arg(short, long, default_value_t = false)]
     file: bool,
     #[arg(short='p', long)]
     filepath: Option<String>,
@@ -10291,21 +10297,32 @@ const PREDEFINED: &str = include_str!("predefined.txt");
  * target\release\sequence_rust 1 2 4194304 268435456
  * 
  * target\release\sequence_rust.exe 4 "[(1,2), (1,3)]" 2 128
- * target\release\sequence_rust.exe 4 "[(1,2)]" 2 1048576 --file
+ * target\release\sequence_rust.exe 4 "[(1,2)]" 2 1048576 --file --perf
  * target\release\sequence_rust.exe 4 "[(1,2), (1,3)]" 2 4194304
  * 
- * [(1,3)] from 2 to 4194304 with 4 threads in 4299.5 minutes (71.66 hours)
- * [(1,2)] from 2 to 1048576 with 4 threads in  182.4 minutes ( 3.04 hours)
+ *                     [(1,3)] from 2 to 4194304 with 4 threads in 4299.5 minutes (71.66 hours)
+ * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 1048576 with 4 threads in  182.4 minutes ( 3.04 hours)
+ * i7-1165G7 @ 2.80GHz 
  * 
- * [(1,2)] (1,000,000) 28.5 mins ~ 35,108 per min
- * [(1,2)] from 2 to 1048576 with 1 thread  in   30.7 minutes ( 0.51 hours)
- * [(1,2)] from 2 to 1048576 with 4 threads in   27.6 minutes ( 0.46 hours)
+ *                     [(1,2)] (1,000,000) 28.5 mins ~ 35,108 per min
+ *                     [(1,2)] from 2 to 1048576 with 1 thread  in   30.7 minutes ( 0.51 hours)
+ *                     [(1,2)] from 2 to 1048576 with 4 threads in   27.6 minutes ( 0.46 hours)
  * 
  */
 
 #[function_name::named]
 fn main() 
 {
+    let output = Command::new("rustc").arg("--version").output().unwrap();
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+    let cpuid = CpuId::new();
+    if let Some(brand) = cpuid.get_processor_brand_string() {
+        println!("main() processor=\"{}\"", brand.as_str().trim());
+    }
+    let time = Local::now().time();
+    let (pm, hour) = time.hour12();
+    println!("main() time={:02}:{:02}:{:02}{}", hour, time.minute(), time.second(), if pm { "pm" } else { "am" });
+    
     let vecargs: Vec<String> = env::args().collect();
     let mut args = Args::parse();
     if let Some(fp) = args.filepath.clone().filter(|fp| fp.len() > 0) {
@@ -10313,6 +10330,9 @@ fn main()
     }
     if args.debug {
         println!("{:#?}", args);
+    }
+    if args.perf {
+        time_graph::enable_data_collection();
     }
     let t1: Instant = Instant::now();
     let inumthreads: u8 = vecargs[1].parse::<u8>().ok().unwrap();
@@ -10330,7 +10350,11 @@ fn main()
 		let parts: Vec<&str> = tuple2.split(",").collect();
 		let num: i32 = parts[0].parse::<i32>().ok().unwrap();
 		let den: i32 = parts[1].parse::<i32>().ok().unwrap();
-		vecratios1.push(Ratio::<i32>::new(num, den));
+        let rat: Ratio<i32> = Ratio::<i32>::new(num, den);
+        if rat > 0.5 {
+            seq1.bln_gt_half = true;
+        }
+		vecratios1.push(rat);
 		if den > 4 || num > 1 {
 			iminfactors = 2;
 		}
@@ -10405,7 +10429,7 @@ fn main()
 	}	
 	
     println!("main() num_threads={}, vec_ratios=[{}], istart={}, ifinish={}", inumthreads, strratios1.replace(" ", ""), istart, ifinish);
-    println!("main() debug={}, file={}{}", args.debug, args.file, if args.file && let Some(ref fp) = args.filepath { format!(", file_path={}", fp) } else { "".to_string() });
+    println!("main() debug={}, file={}{}", args.debug, args.file, if args.file && let Some(ref fp) = args.filepath { format!(", file_path=\"{}\"", fp) } else { "".to_string() });
     
 	if inumthreads == 1 {
 		
@@ -10545,6 +10569,11 @@ fn main()
     // 2 threads .. 0.41 minutes .... 6.77 minutes
     // 4 threads .. 0.38 minutes
     println!("finished from {} to {} with {} threads in {:.1} minutes ({:.2} hours)", istart, ifinish, inumthreads, min, hrs);
+    
+    if args.perf {
+        let graph = time_graph::get_full_graph().unwrap();
+        println!("{}", graph.as_utf8_table());
+    }
 }
 
 

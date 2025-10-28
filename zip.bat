@@ -1,0 +1,1 @@
+"C:\Program Files\7-Zip\7z.exe" a -r -tzip sequence.zip . -xr!target x!*.zip x!*.bat
