@@ -1,13 +1,14 @@
 #![allow(unused_imports)]
 #![allow(unused)]
+#![allow(non_snake_case)] 
 
 extern crate crossbeam;
 extern crate divisors;
-extern crate flurry;
+//extern crate flurry;
 extern crate itertools;
 extern crate num;
 extern crate primes;
-extern crate seize;
+//extern crate seize;
 extern crate shared_memory;
 extern crate std;
 extern crate thousands;
@@ -15,22 +16,27 @@ extern crate thousands;
 mod sequence;
 mod sequence2;
 
-use ahash::{RandomState};
+use ahash::{AHasher, AHashMap, AHashSet, HashSetExt, RandomState};
 use bit_vec::BitVec;
 use chrono::{Local, Timelike};
 use clap::{Parser, Subcommand};
 use fixedbitset::FixedBitSet;
-use flurry::HashSet as FlurryHashSet;
+//use flurry::HashSet as FlurryHashSet;
 use hashbrown::HashMap;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use num::rational::{Ratio, Rational32, Rational64};
+//use perf;
+//use perf::Perf;
+//use perf_macro;
 use primes::{PrimeSet, Sieve};
 use raw_cpuid::CpuId;
 use sequence::Sequence;
 use shared_memory::*;
 use thousands::Separable;
 use time_graph;
+use tinyvec::{array_vec, ArrayVec};
+use tinyvec::{tiny_vec, TinyVec};
 
 use std::clone::Clone;
 use std::collections::{BTreeSet, HashSet};
@@ -81,6 +87,10 @@ impl RatioVec {
 
 struct Main {
 	debug: bool,
+	ary: bool,
+	vec: bool,
+	tinyvec: bool,
+	arrayvec: bool,
     ithread: u32,
     anumthreads: AtomicU32,
     t1: Instant,
@@ -226,6 +236,7 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
     let ithousands: u32 = 1000000;
 	let mut n: u32 = if nstepby > nstart { 0 } else { nstart - nstepby };
 	let mut nvec: Vec<u32> = Vec::new();
+	let mut vecmaxcombinations = vec![0];
 	while n < nfinish
     {
 		n += nstepby;
@@ -260,28 +271,96 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
                 }
             },
             _ => {
-                let mut prev_combination: Vec<u32> = Vec::new();
-                for this_combination in seq.factor_combinations(n as u32)
-                { 
-                    if this_combination != prev_combination 
-                    {
-                        let density: Ratio<i32> = seq.calc_density(&this_combination.iter().map(|&x| x as i32).collect());                    
-                        if let Some(ratio) = self.matches.iter().find(|&x| *x == density)
-                        {
-                            let vec: String = Itertools::join(&mut this_combination.iter(), ", ");
-                            let num: String = n.separate_with_commas();
-							let msg: String = format!("{}    {}    [{}]    {}", ratio, num, vec, this_combination.len());
-							//println!("{} line {}", function_name!(), line!());
-                            if inumthreads == 1 {
-								println!("{}", msg);
+				let mut icombinations = 0;
+				
+				if self.ary {
+					let mut prev_combination: [u32; 24] = [0; 24];
+					for this_combination in seq.factor_combinations_ary(n as u32)
+					{ 
+						icombinations += 1;
+						//println!("icombinations = {}", icombinations);
+						if this_combination != prev_combination 
+						{
+							let mut vec_combination = Vec::new();
+							for x in &this_combination {
+								if *x != 0 {
+									vec_combination.push(*x as i32);
+								} else {
+									break;
+								}
 							}
-							if let Some(tx) = &self.tx {
-								tx.send(Some(Message { n: n, ratio: *ratio, msg: msg }));
+							let density: Ratio<i32> = seq.calc_density(&vec_combination);
+							if let Some(ratio) = self.matches.iter().find(|&x| *x == density)
+							{
+								let vec: String = Itertools::join(&mut this_combination.iter(), ", ");
+								let num: String = n.separate_with_commas();
+								let msg: String = format!("{}    {}    [{}]    {}", ratio, num, vec, this_combination.len());
+								//println!("{} line {}", function_name!(), line!());
+								if inumthreads == 1 {
+									println!("{}", msg);
+								}
+								if let Some(tx) = &self.tx {
+									tx.send(Some(Message { n: n, ratio: *ratio, msg: msg }));
+								}
 							}
-                        }
-                        prev_combination = this_combination;
-                    }
-                }
+							prev_combination = this_combination;
+						}
+					}
+				}
+				if self.vec {
+					let mut prev_combination: Vec<u32> = Vec::new();
+					for this_combination in seq.factor_combinations_vec(n as u32)
+					{ 
+						icombinations += 1;
+						//println!("icombinations = {}", icombinations);
+						if this_combination != prev_combination 
+						{
+							let density: Ratio<i32> = seq.calc_density(&this_combination.iter().map(|&x| x as i32).collect());                    
+							if let Some(ratio) = self.matches.iter().find(|&x| *x == density)
+							{
+								let vec: String = Itertools::join(&mut this_combination.iter(), ", ");
+								let num: String = n.separate_with_commas();
+								let msg: String = format!("{}    {}    [{}]    {}", ratio, num, vec, this_combination.len());
+								//println!("{} line {}", function_name!(), line!());
+								if inumthreads == 1 {
+									println!("{}", msg);
+								}
+								if let Some(tx) = &self.tx {
+									tx.send(Some(Message { n: n, ratio: *ratio, msg: msg }));
+								}
+							}
+							prev_combination = this_combination;
+						}
+					}
+				}
+				if self.tinyvec {
+					let mut prev_combination: TinyVec<[i32; 24]> = tiny_vec![0; 24];
+					for this_combination in seq.factor_combinations_tinyvec(n as u32)
+					{ 
+						icombinations += 1;
+						if this_combination != prev_combination 
+						{
+							let density: Ratio<i32> = seq.calc_density(&this_combination.iter().map(|&x| x as i32).collect());                    
+							if let Some(ratio) = self.matches.iter().find(|&x| *x == density)
+							{
+								let vec: String = Itertools::join(&mut this_combination.iter(), ", ");
+								let num: String = n.separate_with_commas();
+								let msg: String = format!("{}    {}    [{}]    {}", ratio, num, vec, this_combination.len());
+								//println!("{} line {}", function_name!(), line!());
+								if inumthreads == 1 {
+									println!("{}", msg);
+								}
+								if let Some(tx) = &self.tx {
+									tx.send(Some(Message { n: n, ratio: *ratio, msg: msg }));
+								}
+							}
+							prev_combination = this_combination;
+						}
+					}
+				}
+				if icombinations > vecmaxcombinations[vecmaxcombinations.len() - 1] {
+					vecmaxcombinations.push(icombinations);
+				}
                 if (n - nstart - self.ithread) % ithousands == 0
                 {
                     self.print_duration(&seq, n, (n - nstart)/inumthreads);   
@@ -290,6 +369,7 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
         }
     }
 	
+	println!("maxcombinations = {:?}", vecmaxcombinations);
 	if self.debug {
 		println!("n = {}", n);
 		println!("afinish = {}", self.afinish.load(Ordering::SeqCst));
@@ -807,8 +887,8 @@ fn test_combinations(primes: Arc<Vec<u32>>, factor_combinations: bool, factor_sl
     let mut seq: Sequence = Sequence::new(nfinish, false, false);
     seq.set_primes(&primes);
     
-    let vecdivisors1 = seq.divisor_gen(43968, vec![]);
-    let combinations1 = seq.factor_combinations(43968).clone();
+    let vecdivisors1 = seq.divisor_gen(43968);
+    let combinations1 = seq.factor_combinations_vec(43968).clone();
     println!("divisor_gen(43968) = {:?}", vecdivisors1);
     for combo1 in vec![vec![3, 16, 916], vec![6, 8, 916], vec![6, 16, 458], vec![3, 64, 229], vec![12, 16, 229], vec![8, 12, 458], vec![6, 32, 229], vec![3, 32, 458]] {
         let bln: bool = combinations1.iter().find(|&x| *x == combo1).is_none();
@@ -839,7 +919,7 @@ fn test_combinations(primes: Arc<Vec<u32>>, factor_combinations: bool, factor_sl
         }
         if factor_combinations {
             let t2: Instant = Instant::now();
-            vecvec1 = seq.factor_combinations(n as u32);
+            vecvec1 = seq.factor_combinations_vec(n as u32).clone();
             if vecfactors2.len() >= 4 {
                 perf.get_mut(&vecfactors2.len()).unwrap()[0] += t2.elapsed().as_secs_f64();
                 println!("n = {}, factors2.len() = {}, factor_combinations() in {:.2} seconds", n, vecfactors2.len(), t2.elapsed().as_secs_f64());
@@ -10277,8 +10357,16 @@ struct Args {
     perf: bool,
     #[arg(short, long, default_value_t = false)]
     file: bool,
-    #[arg(short='p', long)]
+    #[arg(long)]
     filepath: Option<String>,
+    #[arg(long, default_value_t = false)]
+    array: bool,
+	#[arg(long, default_value_t = false)]
+    vec: bool,
+	#[arg(long, default_value_t = false)]
+    tinyvec: bool,
+	#[arg(long, default_value_t = false)]
+    arrayvec: bool,
 }
 
 
@@ -10297,8 +10385,13 @@ const PREDEFINED: &str = include_str!("predefined.txt");
  * target\release\sequence_rust 1 2 4194304 268435456
  * 
  * target\release\sequence_rust.exe 4 "[(1,2), (1,3)]" 2 128
+ * target\release\sequence_rust.exe 4 "[(1,2)]" 2 65536 --file --perf
  * target\release\sequence_rust.exe 4 "[(1,2)]" 2 1048576 --file --perf
  * target\release\sequence_rust.exe 4 "[(1,2), (1,3)]" 2 4194304
+ * 
+ * target\debug\sequence_rust.exe 1 "[(1,2)]" 549120 591360 --perf --vec
+ * target\debug\sequence_rust.exe 1 "[(1,2)]" 3655680 3886080 --perf --vec
+ * target\release\sequence_rust.exe 1 "[(1,2)]" 3655680 3886080 --perf --array --tinyarray
  * 
  *                     [(1,3)] from 2 to 4194304 with 4 threads in 4299.5 minutes (71.66 hours)
  * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 1048576 with 4 threads in  182.4 minutes ( 3.04 hours)
@@ -10310,19 +10403,24 @@ const PREDEFINED: &str = include_str!("predefined.txt");
  * 
  */
 
+fn print_time(f: &str, s: &str)
+{
+    let time = Local::now().time();
+    let (pm, hour) = time.hour12();
+    println!("{}() {}={:02}:{:02}:{:02}{}", f, s, hour, time.minute(), time.second(), if pm { "pm" } else { "am" });	
+}
+
 #[function_name::named]
 fn main() 
 {
     let output = Command::new("rustc").arg("--version").output().unwrap();
-    print!("{}", String::from_utf8_lossy(&output.stdout));
+    println!("{}() rust_version=\"{}\"", function_name!(), String::from_utf8_lossy(&output.stdout).trim_end());
     let cpuid = CpuId::new();
     if let Some(brand) = cpuid.get_processor_brand_string() {
-        println!("main() processor=\"{}\"", brand.as_str().trim());
+        println!("{}() processor=\"{}\"", function_name!(), brand.as_str().trim());
     }
-    let time = Local::now().time();
-    let (pm, hour) = time.hour12();
-    println!("main() time={:02}:{:02}:{:02}{}", hour, time.minute(), time.second(), if pm { "pm" } else { "am" });
-    
+    print_time(function_name!(), "start_time");
+	
     let vecargs: Vec<String> = env::args().collect();
     let mut args = Args::parse();
     if let Some(fp) = args.filepath.clone().filter(|fp| fp.len() > 0) {
@@ -10332,7 +10430,7 @@ fn main()
         println!("{:#?}", args);
     }
     if args.perf {
-        time_graph::enable_data_collection();
+        time_graph::enable_data_collection(true);
     }
     let t1: Instant = Instant::now();
     let inumthreads: u8 = vecargs[1].parse::<u8>().ok().unwrap();
@@ -10342,16 +10440,25 @@ fn main()
     let ifinish: u32 = vecargs[4].parse::<u32>().ok().unwrap();
     let mut iminfactors: usize = 4;
 	
+    // let mut setprimes1: Arc<BTreeSet<i64>> = Arc::new(init(ifinish.ilog2() + 1));
+    let mut vecprimes1: Arc<Vec<u32>> = Arc::new(init(ifinish as u32));
+    // new(i: u32, capacity: usize, global: bool, resize: bool)
+    let mut seq1: Sequence = Sequence::new(std::cmp::max(ifinish as usize, 8192), false, false);
+    seq1.bln_factors = true;
+    seq1.bln_divisors = false;
+    seq1.set_primes(&vecprimes1);
+
     //let vecratios1: Vec<Ratio<i32>> = (iratio..=iratio).map(|x| Ratio::<i32>::new(1, x as i32)).collect();
     let mut vecratios1: Vec<Ratio<i32>> = Vec::new();
 	let tuples: Vec<&str> = strratios1.split("),(").collect();
+    let half: Ratio<i32> = Ratio::<i32>::new(1, 2);
 	for tuple1 in tuples {
 		let tuple2 = tuple1.replace("(", "").replace(")", "");
 		let parts: Vec<&str> = tuple2.split(",").collect();
 		let num: i32 = parts[0].parse::<i32>().ok().unwrap();
 		let den: i32 = parts[1].parse::<i32>().ok().unwrap();
         let rat: Ratio<i32> = Ratio::<i32>::new(num, den);
-        if rat > 0.5 {
+        if rat > half {
             seq1.bln_gt_half = true;
         }
 		vecratios1.push(rat);
@@ -10363,24 +10470,7 @@ fn main()
     if args.filepath.is_none() {
         args.filepath = Some(format!("sequence {}.txt", strratios1.replace("),(", ") (")));
     }
-	// vecratios1.push(Ratio::<i32>::new(1, 2));
-    // vecratios1.push(Ratio::<i32>::new(1, 3));
-    // vecratios1.push(Ratio::<i32>::new(2, 3));
-    // vecratios1.push(Ratio::<i32>::new(1, 4));
-    // vecratios1.push(Ratio::<i32>::new(3, 4));
-    // vecratios1.push(Ratio::<i32>::new(1, 5));
-    // vecratios1.push(Ratio::<i32>::new(2, 5));
-    // vecratios1.push(Ratio::<i32>::new(3, 5));
-    // vecratios1.push(Ratio::<i32>::new(4, 5));
-    // let mut setprimes1: Arc<BTreeSet<i64>> = Arc::new(init(ifinish.ilog2() + 1));
-    let mut vecprimes1: Arc<Vec<u32>> = Arc::new(init(ifinish as u32));
     
-    // new(i: u32, capacity: usize, global: bool, resize: bool)
-    let mut seq1: Sequence = Sequence::new(std::cmp::max(ifinish as usize, 8192), false, false);
-    seq1.bln_factors = true;
-    seq1.bln_divisors = false;
-    seq1.set_primes(&vecprimes1);
-
     let mut predefined1: HashMap<u32, Vec<RatioVec>, RandomState> = HashMap::with_hasher(RandomState::new());
     for line in PREDEFINED.lines() {
         let mut vars: Vec<&str> = line.split("    ").collect();
@@ -10417,7 +10507,7 @@ fn main()
 	if false {
 		seq1.min_factors_len = 2;
 		for n in [720, 840, 6720] {
-			for this_combination in seq1.factor_combinations(n as u32) {
+			for this_combination in seq1.factor_combinations_vec(n as u32) {
 				let this_density: Ratio<i32> = seq1.calc_density(&this_combination.iter().map(|&x| x as i32).collect());                    
 				//if let Some(this_ratio) = vecratios1.iter().find(|&x| *x == this_density) {
 				if *this_density.denom() <= 3 {
@@ -10428,14 +10518,18 @@ fn main()
 		seq1.min_factors_len = 4;
 	}	
 	
-    println!("main() num_threads={}, vec_ratios=[{}], istart={}, ifinish={}", inumthreads, strratios1.replace(" ", ""), istart, ifinish);
-    println!("main() debug={}, file={}{}", args.debug, args.file, if args.file && let Some(ref fp) = args.filepath { format!(", file_path=\"{}\"", fp) } else { "".to_string() });
+    println!("{}() num_threads={}, vec_ratios=[{}], istart={}, ifinish={}", function_name!(), inumthreads, strratios1.replace(" ", ""), istart, ifinish);
+    println!("{}() vec={}, ary={}, debug={}, perf={}, file={}{}", function_name!(), args.vec, args.array, args.debug, args.perf, args.file, if args.file && let Some(ref fp) = args.filepath { format!(", file_path=\"{}\"", fp) } else { "".to_string() });
     
 	if inumthreads == 1 {
 		
 		let (tx1, rx1) = mpsc::channel::<Option<Message>>();
 		let mut m = Main { 
 			debug: args.debug,
+			ary: args.array,
+			vec: args.vec,
+			tinyvec: args.tinyvec,
+			arrayvec: args.arrayvec,
 			ithread: 0,
 			t1: t1, 
 			anumthreads: AtomicU32::new(inumthreads as u32), 
@@ -10497,6 +10591,10 @@ fn main()
 				threads.push(scp.spawn(move || {
 					let mut m = Main { 
 						debug: args.debug,
+						ary: args.array,
+						vec: args.vec,
+						tinyvec: args.tinyvec,
+						arrayvec: args.arrayvec,
 						ithread: ith as u32,
 						t1: t1, 
 						anumthreads: AtomicU32::new(inumthreads as u32), 
@@ -10562,17 +10660,28 @@ fn main()
 			
 		});
 	}
-    let sec = t1.elapsed().as_secs_f64();
-    let min = sec/60.0;
-    let hrs = min/60.0;
+    let total_sec = t1.elapsed().as_secs_f64();
+    let total_min = total_sec/60.0;
+    let total_hrs = total_min/60.0;
     // 1 thread ... 0.70 minutes ... 10.05 minutes
     // 2 threads .. 0.41 minutes .... 6.77 minutes
     // 4 threads .. 0.38 minutes
-    println!("finished from {} to {} with {} threads in {:.1} minutes ({:.2} hours)", istart, ifinish, inumthreads, min, hrs);
+	print_time(function_name!(), "end_time");
+    println!("finished from {} to {} with {} threads in {:.2} seconds ({:.2} minutes) ({:.2} hours)", istart, ifinish, inumthreads, total_sec, total_min, total_hrs);
     
+	/*
+	divisor_gen ... 36.97 (19.19%)
+	factor_combinations ... 211.34 (109.68%)
+	mult_ary ... 0.12 (0.06%)
+	calc_density ... 1.08 (0.56%)
+	*/
     if args.perf {
-        let graph = time_graph::get_full_graph().unwrap();
-        println!("{}", graph.as_utf8_table());
+        let graph = time_graph::get_full_graph();
+		println!("{}", graph.as_dot());
+		for timed_span in graph.spans() {
+			let secs = timed_span.elapsed.as_secs_f64();
+			println!("{} ... {:.2} ({:.2}%)", timed_span.callsite.name(), secs, 100.0*secs/total_sec);
+		}
     }
 }
 
