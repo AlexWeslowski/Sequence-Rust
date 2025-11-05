@@ -215,7 +215,7 @@ for inumthreads in range(2, 8 + 1):
 		break
 */
 #[function_name::named]
-pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut seq: Sequence)
+pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut seq: Sequence) -> Vec<usize>
 {
     /*
     let mut seq: Sequence = Sequence::new(2, nfinish as usize, false);
@@ -292,9 +292,9 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
 							let density: Ratio<i32> = seq.calc_density(&vec_combination);
 							if let Some(ratio) = self.matches.iter().find(|&x| *x == density)
 							{
-								let vec: String = Itertools::join(&mut this_combination.iter(), ", ");
+								let vec: String = Itertools::join(&mut vec_combination.iter(), ", ");
 								let num: String = n.separate_with_commas();
-								let msg: String = format!("{}    {}    [{}]    {}", ratio, num, vec, this_combination.len());
+								let msg: String = format!("{}    {}    [{}]    {}", ratio, num, vec, vec_combination.len());
 								//println!("{} line {}", function_name!(), line!());
 								if inumthreads == 1 {
 									println!("{}", msg);
@@ -358,6 +358,31 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
 						}
 					}
 				}
+				if self.arrayvec {
+					let mut prev_combination: ArrayVec<[i32; 24]> = array_vec![0; 24];
+					for this_combination in seq.factor_combinations_arrayvec(n as u32)
+					{ 
+						icombinations += 1;
+						if this_combination != prev_combination 
+						{
+							let density: Ratio<i32> = seq.calc_density(&this_combination.iter().map(|&x| x as i32).collect());                    
+							if let Some(ratio) = self.matches.iter().find(|&x| *x == density)
+							{
+								let vec: String = Itertools::join(&mut this_combination.iter(), ", ");
+								let num: String = n.separate_with_commas();
+								let msg: String = format!("{}    {}    [{}]    {}", ratio, num, vec, this_combination.len());
+								//println!("{} line {}", function_name!(), line!());
+								if inumthreads == 1 {
+									println!("{}", msg);
+								}
+								if let Some(tx) = &self.tx {
+									tx.send(Some(Message { n: n, ratio: *ratio, msg: msg }));
+								}
+							}
+							prev_combination = this_combination;
+						}
+					}
+				}
 				if icombinations > vecmaxcombinations[vecmaxcombinations.len() - 1] {
 					vecmaxcombinations.push(icombinations);
 				}
@@ -379,6 +404,7 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
 	if let Some(tx) = &self.tx {
 		tx.send(None);
 	}
+	return seq.max_combinations;
 }
 }
 
@@ -906,7 +932,8 @@ fn test_combinations(primes: Arc<Vec<u32>>, factor_combinations: bool, factor_sl
     //35840..131072
     //16777216..16973826
     for n in (35840..nfinish+2).step_by(2) {
-        let mut vecvec1: Vec<Vec<u32>> = Vec::new();
+        //let mut vecvec1: TinyVec<[Vec<u32>; 1024]> = TinyVec::Heap(Vec::new());
+		let mut vecvec1: Vec<Vec<u32>> = Vec::new();
         let mut setvec2: HashSet<Vec<u32>> = HashSet::new();
         let mut testsetvec2: HashSet<Vec<u32>> = HashSet::new();
         let mut vecfactors2: Vec<u32> = Vec::new();
@@ -10389,9 +10416,10 @@ const PREDEFINED: &str = include_str!("predefined.txt");
  * target\release\sequence_rust.exe 4 "[(1,2)]" 2 1048576 --file --perf
  * target\release\sequence_rust.exe 4 "[(1,2), (1,3)]" 2 4194304
  * 
- * target\debug\sequence_rust.exe 1 "[(1,2)]" 549120 591360 --perf --vec
- * target\debug\sequence_rust.exe 1 "[(1,2)]" 3655680 3886080 --perf --vec
- * target\release\sequence_rust.exe 1 "[(1,2)]" 3655680 3886080 --perf --array --tinyarray
+ * target\debug\sequence_rust.exe 1 "[(1,2)]" 549120 591360 --perf -array --vec
+ * target\debug\sequence_rust.exe 1 "[(1,2)]" 3655680 3886080 --perf --vec --arrayvec
+ * target\release\sequence_rust.exe 1 "[(1,2)]" 549120 591360 --perf -array --vec
+ * target\release\sequence_rust.exe 1 "[(1,2)]" 3655680 3886080 --perf --array --tinyvec
  * 
  *                     [(1,3)] from 2 to 4194304 with 4 threads in 4299.5 minutes (71.66 hours)
  * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 1048576 with 4 threads in  182.4 minutes ( 3.04 hours)
@@ -10519,7 +10547,8 @@ fn main()
 	}	
 	
     println!("{}() num_threads={}, vec_ratios=[{}], istart={}, ifinish={}", function_name!(), inumthreads, strratios1.replace(" ", ""), istart, ifinish);
-    println!("{}() vec={}, ary={}, debug={}, perf={}, file={}{}", function_name!(), args.vec, args.array, args.debug, args.perf, args.file, if args.file && let Some(ref fp) = args.filepath { format!(", file_path=\"{}\"", fp) } else { "".to_string() });
+    println!("{}() vec={}, array={}, tinyvec={}, arrayvec={}", function_name!(), args.vec, args.array, args.tinyvec, args.arrayvec);
+	println!("{}() debug={}, perf={}, file={}{}", function_name!(), args.debug, args.perf, args.file, if args.file && let Some(ref fp) = args.filepath { format!(", file_path=\"{}\"", fp) } else { "".to_string() });
     
 	if inumthreads == 1 {
 		
@@ -10539,7 +10568,8 @@ fn main()
 			predefined: predefined1,
 			tx: if args.file { Some(tx1) } else { None },
 		};
-		m.do_work(istart, ifinish, 1, seq1);
+		let max_combinations: Vec<usize> = m.do_work(istart, ifinish, 1, seq1);
+		println!("maxcombinations = {:?}", max_combinations);
 		
 		if args.file {
 			let mut messages: Vec<Message> = Vec::new();
@@ -10604,7 +10634,8 @@ fn main()
 						predefined: predefined2,
                         tx: if args.file { Some(tx2) } else { None },
 					};
-					m.do_work(istart, ifinish, inumthreads as u32, seq2);
+					let max_combinations: Vec<usize> = m.do_work(istart, ifinish, inumthreads as u32, seq2);
+					println!("maxcombinations = {:?}", max_combinations);
 					//println!("{}() line {} thread {}", function_name!(), line!(), ith);
 				}));
 			}
@@ -10674,6 +10705,16 @@ fn main()
 	factor_combinations ... 211.34 (109.68%)
 	mult_ary ... 0.12 (0.06%)
 	calc_density ... 1.08 (0.56%)
+	
+	factor_combinations_ary ... 1672.29 (7.75%)
+	factor_combinations_tinyvec ... 19907.35 (92.25%)
+	
+	   array from 549120 to 591360 with 1 threads in 34.41-46.40 seconds
+	 tinyvec from 549120 to 591360 with 1 threads in 78.13-79.44 seconds
+	arrayvec from 549120 to 591360 with 1 threads in  seconds
+	     vec from 549120 to 591360 with 1 threads in 71.92-97.05-135.97 seconds
+	
+	max_combinations = [457, 641, 819, 916]
 	*/
     if args.perf {
         let graph = time_graph::get_full_graph();

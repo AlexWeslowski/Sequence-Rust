@@ -28,6 +28,8 @@ use primes::{Sieve, PrimeSet};
 //use seize::collector::Guard;
 use std::cmp::{max, min};
 use std::collections::{BTreeSet, HashSet};
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::result::Result;
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -36,7 +38,8 @@ use thousands::Separable;
 use time_graph_macros::instrument;
 use tinyvec::{array_vec, ArrayVec};
 use tinyvec::{tiny_vec, TinyVec};
-//use tinyvec::tinyvec::{tiny_vec, TinyVec};
+//use tinyvec::TinyVec as SequenceVec;
+use std::vec::Vec as SequenceVec;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Factor {
@@ -124,10 +127,21 @@ pub struct Sequence
     capacity_sqrt: u32,
     half: Ratio<i32>,
     one: Ratio<i32>,
-    combinations_vec: Vec<Vec<u32>>,
-    combinations_tinyvec: Vec<TinyVec<[i32; 24]>>,
-    combinations_arrayvec: Vec<ArrayVec<[i32; 24]>>,
-	combinations_ary: Vec<[u32; 24]>,
+	/*
+    combinations_vec: SequenceVec<[Vec<u32>; 1024]>,
+    combinations_tinyvec: SequenceVec<[TinyVec<[i32; 24]>; 1024]>,
+    combinations_arrayvec: SequenceVec<[ArrayVec<[i32; 24]>; 1024]>,
+	combinations_ary: SequenceVec<[[u32; 24]; 1024]>,
+	*/
+	combinations_vec: SequenceVec<Vec<u32>>,
+    combinations_tinyvec: SequenceVec<TinyVec<[i32; 24]>>,
+    combinations_arrayvec: SequenceVec<ArrayVec<[i32; 24]>>,
+	combinations_ary: SequenceVec<[u32; 24]>,
+	pub max_combinations: Vec<usize>,
+	backtrack_vec_file: Option<std::fs::File>,
+	backtrack_tinyvec_file: Option<std::fs::File>,
+	backtrack_arrayvec_file: Option<std::fs::File>,
+	backtrack_ary_file: Option<std::fs::File>,
     //pub lcm_map: Mutex<HashMap<(i32, i32), i32, RandomState>>,
     pub lcm_map: Arc<Mutex<HashMap<(i32, i32), i32, RandomState>>>,
     //setprimes: Arc<HashSet<i64, RandomState>>,
@@ -204,10 +218,21 @@ pub fn new(capacity: usize, global: bool, resize: bool) -> Self
         capacity_sqrt: capacity.isqrt() as u32,
         half: Ratio::<i32>::new(1, 2), 
         one: Ratio::<i32>::new(1, 1),
-        combinations_vec: Vec::<Vec<u32>>::with_capacity(512), 
-		combinations_tinyvec: Vec::<TinyVec<[i32; 24]>>::with_capacity(512),
-		combinations_arrayvec: Vec::<ArrayVec<[i32; 24]>>::with_capacity(512),
-		combinations_ary: Vec::<[u32; 24]>::with_capacity(512), 
+		/*
+        combinations_vec: SequenceVec::<[Vec<u32>; 1024]>::with_capacity(512), 
+		combinations_tinyvec: SequenceVec::<[TinyVec<[i32; 24]>; 1024]>::with_capacity(512),
+		combinations_arrayvec: SequenceVec::<[ArrayVec<[i32; 24]>; 1024]>::with_capacity(512),
+		combinations_ary: SequenceVec::<[[u32; 24]; 1024]>::with_capacity(512), 
+		*/
+		combinations_vec: SequenceVec::<Vec<u32>>::with_capacity(512), 
+		combinations_tinyvec: SequenceVec::<TinyVec<[i32; 24]>>::with_capacity(512),
+		combinations_arrayvec: SequenceVec::<ArrayVec<[i32; 24]>>::with_capacity(512),
+		combinations_ary: SequenceVec::<[u32; 24]>::with_capacity(512), 
+		max_combinations: vec![0],
+		backtrack_vec_file: if true { Some(OpenOptions::new().create(true).append(true).open("backtrack_vec.txt").unwrap()) } else { None },
+		backtrack_tinyvec_file: if true { Some(OpenOptions::new().create(true).append(true).open("backtrack_tinyvec.txt").unwrap()) } else { None },
+		backtrack_arrayvec_file: if true { Some(OpenOptions::new().create(true).append(true).open("backtrack_arrayvec.txt").unwrap()) } else { None },
+		backtrack_ary_file: if true { Some(OpenOptions::new().create(true).append(true).open("backtrack_ary.txt").unwrap()) } else { None },
         //lcm_map: Mutex::new(HashMap::<(i64, i64), i64, RandomState>::new()),
         //lcm_map: Mutex::new(HashMap::with_hasher(RandomState::new())),
         lcm_map: Arc::new(Mutex::new(HashMap::with_hasher(RandomState::new()))),
@@ -360,20 +385,125 @@ pub fn init(&mut self)
 }
 
 
-pub fn backtrack_ary(&mut self, istart: u32, itarget: u32, factors: &mut[u32; 24], factors_len: usize)
+pub fn backtrack_ary(&mut self, istart: u32, itarget: u32, mut factors: [u32; 24], factors_len: usize)
 {
     let t0 = Instant::now();
     //println!("backtrack_ary(istart = {}, itarget = {}, factors = {:?}, factors_len = {})", istart, itarget, factors, factors_len);
-	
     if itarget == 1 
     {
         if (factors_len >= self.min_factors_len && factors_len <= self.max_factors_len) 
         {
-            factors.sort_unstable();
-            if (self.bln_gt_half || factors[0] != 2) && factors[0] != factors[1]
+			let factors_sorted: &mut [u32] = &mut factors[0..factors_len];
+			factors_sorted.sort_unstable();
+			if true && let Some(ref mut f) = self.backtrack_ary_file {
+				writeln!(f, "istart = {}, itarget = {}, factors = {:?}, factors_len = {}", istart, itarget, factors_sorted, factors_len);
+			}
+            if (self.bln_gt_half || factors_sorted[0] != 2) && factors_sorted[0] != factors_sorted[1]
             {
                 let mut bappend: bool = true;
                 let mut j: usize = factors_len;
+                while j > 1
+                {
+                    j -= 1;
+                    let mut k: usize = j;
+                    while k > 0
+                    { 
+                        k -= 1;
+                        if factors_sorted[j] % factors_sorted[k] == 0
+                        {
+                            bappend = false;
+                            break;
+                        }
+                    }
+                    if !bappend
+                    {
+                        break;
+                    }
+                }
+                if bappend
+                {
+					let mut factors_array: [u32; 24] = [0; 24];
+					for i in 0..factors_sorted.len() {
+						factors_array[i] = factors_sorted[i];
+					}
+					if self.combinations_ary.iter().find(|&x| *x == factors_array).is_none() {
+						self.combinations_ary.push(factors_array);
+					}
+                }
+            }
+        }
+        
+    } else {
+        
+		unsafe {
+			if self.bitprimes.contains_unchecked(itarget as usize) {
+				//println!("{} is prime", itarget);			
+				*factors.get_unchecked_mut(factors_len) = itarget;
+				self.backtrack_ary(itarget, 1, factors.clone(), factors_len + 1);
+				*factors.get_unchecked_mut(factors_len) = 0;
+			} else {
+				//let bprint: bool = true;
+				//let bprint: bool = itarget == 24 * 4373 || itarget == 1049520;
+				if self.exhaustive_search {
+					let mut i = istart;
+					while i * i <= itarget {
+						if itarget % i == 0 {
+							*factors.get_unchecked_mut(factors_len) = i;
+							//if bprint { println!("n = {}, istart = {}, itarget = {}, i = {}, factors = {:?}", n, istart, itarget, i, factors); }
+							self.backtrack_ary(i, itarget / i, factors.clone(), factors_len + 1);
+							*factors.get_unchecked_mut(factors_len) = 0;
+						}
+						i += 1;
+					}
+				} else {
+					//let mut vecdivisors: Vec<u32> = self.divisor_gen(itarget);
+					let mut vecdivisors: Vec<u32> = divisors::get_divisors(itarget);
+					//println!("vecdivisors({}) orig: {:?}", itarget, vecdivisors);
+					//vecdivisors.sort_unstable();
+					//println!("vecdivisors({}) sort: {:?}", vecdivisors);
+					if false {
+						vecdivisors.push(itarget);
+					}
+					//let lastdivisor = *vecdivisors.get_unchecked(vecdivisors.len() - 1);
+					let lastfactor = if factors_len > 0 { *factors.get_unchecked(factors_len - 1) } else { 0 };
+					for div in &vecdivisors {
+						if *div != lastfactor && (self.bln_gt_half || *div != 2) {
+							*factors.get_unchecked_mut(factors_len) = *div;
+							self.backtrack_ary(*div, itarget / div, factors.clone(), factors_len + 1);
+							*factors.get_unchecked_mut(factors_len) = 0;
+						}
+					}
+					if true {
+						*factors.get_unchecked_mut(factors_len) = itarget;
+						self.backtrack_ary(itarget, 1, factors.clone(), factors_len + 1);
+						*factors.get_unchecked_mut(factors_len) = 0;
+					}
+				}
+		}
+        }
+    }
+    
+   return;
+}
+ 
+ 
+pub fn backtrack_arrayvec(&mut self, istart: i32, itarget: i32, mut factors: ArrayVec<[i32; 24]>)
+{
+    let t0 = Instant::now();
+    println!("backtrack_arrayvec(istart = {}, itarget = {}, factors = {:?}, factors_len = {})", istart, itarget, factors, factors.len());
+	
+    if itarget == 1 
+    {
+        if (factors.len() >= self.min_factors_len && factors.len() <= self.max_factors_len) 
+        {
+            factors.sort_unstable();
+			if true && let Some(ref mut f) = self.backtrack_arrayvec_file {
+				writeln!(f, "istart = {}, itarget = {}, factors = {:?}, factors_len = {}", istart, itarget, factors, factors.len());
+			}
+            if (self.bln_gt_half || factors[0] != 2) && factors[0] != factors[1]
+            {
+                let mut bappend: bool = true;
+                let mut j: usize = factors.len();
                 while j > 1
                 {
                     j -= 1;
@@ -392,73 +522,81 @@ pub fn backtrack_ary(&mut self, istart: u32, itarget: u32, factors: &mut[u32; 24
                         break;
                     }
                 }
-                if bappend && self.combinations_ary.iter().find(|&x| *x == *factors).is_none()
+                if bappend && self.combinations_arrayvec.iter().find(|&x| *x == factors).is_none()
                 {
-                    self.combinations_ary.push(*factors);
+                    self.combinations_arrayvec.push(factors.clone());
                 }
             }
         }
         
     } else {
         
-        if unsafe { self.bitprimes.contains_unchecked(itarget as usize) } {
-            //println!("{} is prime", itarget);
-            factors[factors_len] = itarget;
-            self.backtrack_ary(itarget, 1, &mut factors.clone(), factors_len + 1);
-			factors[factors_len] = 0;
-        } else {
-            //let bprint: bool = true;
-            //let bprint: bool = itarget == 24 * 4373 || itarget == 1049520;
-            if self.exhaustive_search {
-                let mut i = istart;
-                while i * i <= itarget {
-                    if itarget % i == 0 {
-                        factors[factors_len] = i;
-                        //if bprint { println!("n = {}, istart = {}, itarget = {}, i = {}, factors = {:?}", n, istart, itarget, i, factors); }
-                        self.backtrack_ary(i, itarget / i, factors, factors_len + 1);
-						factors[factors_len] = 0;
-                    }
-                    i += 1;
-                }
-            } else {
-                //let mut vecdivisors: Vec<u32> = self.divisor_gen(itarget);
-				let mut vecdivisors: Vec<u32> = divisors::get_divisors(itarget);
-				//println!("vecdivisors({}) orig: {:?}", itarget, vecdivisors);
-                //vecdivisors.sort_unstable();
-				//println!("vecdivisors({}) sort: {:?}", vecdivisors);
-                if false {
-                    vecdivisors.push(itarget);
-                }
-                for div in &vecdivisors {
-                    if *div != vecdivisors[vecdivisors.len() - 1] {
-                        factors[factors_len] = *div;
-                        self.backtrack_ary(*div, itarget / div, &mut factors.clone(), factors_len + 1);
-						factors[factors_len] = 0;
-                    }
-                }
-                if true {
-                    factors[factors_len] = itarget;
-                    self.backtrack_ary(itarget, 1, &mut factors.clone(), factors_len + 1);
-					factors[factors_len] = 0;
-                }
-            }
-        }
+		unsafe {
+			if self.bitprimes.contains_unchecked(itarget as usize) {
+				//println!("{} is prime", itarget);
+				factors.push(itarget);
+				self.backtrack_arrayvec(itarget, 1, factors.clone());
+				factors.pop();
+			} else {
+				//let bprint: bool = true;
+				//let bprint: bool = itarget == 24 * 4373 || itarget == 1049520;
+				if self.exhaustive_search {
+					let mut i = istart;
+					while i * i <= itarget {
+						if itarget % i == 0 {
+							factors.push(i as i32);
+							//if bprint { println!("n = {}, istart = {}, itarget = {}, i = {}, factors = {:?}", n, istart, itarget, i, factors); }
+							self.backtrack_arrayvec(i, itarget / i, factors.clone());
+							factors.pop();
+						}
+						i += 1;
+					}
+				} else {
+					//let mut vecdivisors: Vec<u32> = self.divisor_gen(itarget);
+					let mut vecdivisors: Vec<u32> = divisors::get_divisors(itarget as u32);
+					//println!("vecdivisors({}) orig: {:?}", itarget, vecdivisors);
+					//vecdivisors.sort_unstable();
+					//println!("vecdivisors({}) sort: {:?}", itarget, vecdivisors);
+					if false {
+						vecdivisors.push(itarget as u32);
+					}
+					let lastfactor = if factors.len() > 0 { *factors.get_unchecked(factors.len() - 1) } else { 0 };
+					for vd in 0..vecdivisors.len() {
+						let idiv = *vecdivisors.get_unchecked(vd) as i32;
+						if idiv != lastfactor && (self.bln_gt_half || idiv != 2) {
+							factors.push(idiv);
+							//if bprint { println!("n = {}, istart = {}, itarget = {}, div = {}, factors = {:?}", n, istart, itarget, div, factors); }
+							self.backtrack_arrayvec(idiv, itarget / idiv, factors.clone());
+							factors.pop();
+						}
+					}
+					if true {
+						factors.push(itarget as i32);
+						self.backtrack_arrayvec(itarget, 1, factors.clone());
+						factors.pop();
+					}
+				}
+			}
+		}
     }
     
    return;
 }
- 
- 
+
+
 pub fn backtrack_tinyvec(&mut self, istart: i32, itarget: i32, mut factors: TinyVec<[i32; 24]>)
 {
     let t0 = Instant::now();
-    //println!("backtrack_tinyvec(istart = {}, itarget = {}, factors = {:?}, factors_len = {})", istart, itarget, factors, factors.len());
+    println!("backtrack_tinyvec(istart = {}, itarget = {}, factors = {:?}, factors_len = {})", istart, itarget, factors, factors.len());
 	
     if itarget == 1 
     {
         if (factors.len() >= self.min_factors_len && factors.len() <= self.max_factors_len) 
         {
             factors.sort_unstable();
+			if true && let Some(ref mut f) = self.backtrack_tinyvec_file {
+				writeln!(f, "istart = {}, itarget = {}, factors = {:?}, factors_len = {}", istart, itarget, factors, factors.len());
+			}
             if (self.bln_gt_half || factors[0] != 2) && factors[0] != factors[1]
             {
                 let mut bappend: bool = true;
@@ -490,50 +628,54 @@ pub fn backtrack_tinyvec(&mut self, istart: i32, itarget: i32, mut factors: Tiny
         
     } else {
         
-        if unsafe { self.bitprimes.contains_unchecked(itarget as usize) } {
-            //println!("{} is prime", itarget);
-            factors.push(itarget);
-            self.backtrack_tinyvec(itarget, 1, factors.clone());
-            factors.pop();
-        } else {
-            //let bprint: bool = true;
-            //let bprint: bool = itarget == 24 * 4373 || itarget == 1049520;
-            if self.exhaustive_search {
-                let mut i = istart;
-                while i * i <= itarget {
-                    if itarget % i == 0 {
-                        factors.push(i as i32);
-                        //if bprint { println!("n = {}, istart = {}, itarget = {}, i = {}, factors = {:?}", n, istart, itarget, i, factors); }
-                        self.backtrack_tinyvec(i, itarget / i, factors.clone());
-                        factors.pop();
-                    }
-                    i += 1;
-                }
-            } else {
-                //let mut vecdivisors: Vec<u32> = self.divisor_gen(itarget);
-				let mut vecdivisors: Vec<u32> = divisors::get_divisors(itarget as u32);
-				//println!("vecdivisors({}) orig: {:?}", itarget, vecdivisors);
-                //vecdivisors.sort_unstable();
-				//println!("vecdivisors({}) sort: {:?}", itarget, vecdivisors);
-                if false {
-                    vecdivisors.push(itarget as u32);
-                }
-                for div in &vecdivisors {
-                    if *div != vecdivisors[vecdivisors.len() - 1] {
-						let idiv = *div as i32;
-                        factors.push(idiv);
-                        //if bprint { println!("n = {}, istart = {}, itarget = {}, div = {}, factors = {:?}", n, istart, itarget, div, factors); }
-                        self.backtrack_tinyvec(idiv, itarget / idiv, factors.clone());
-                        factors.pop();
-                    }
-                }
-                if true {
-                    factors.push(itarget as i32);
-                    self.backtrack_tinyvec(itarget, 1, factors.clone());
-                    factors.pop();
-                }
-            }
-        }
+		unsafe {
+			if self.bitprimes.contains_unchecked(itarget as usize) {
+				//println!("{} is prime", itarget);
+				factors.push(itarget);
+				self.backtrack_tinyvec(itarget, 1, factors.clone());
+				factors.pop();
+			} else {
+				//let bprint: bool = true;
+				//let bprint: bool = itarget == 24 * 4373 || itarget == 1049520;
+				if self.exhaustive_search {
+					let mut i = istart;
+					while i * i <= itarget {
+						if itarget % i == 0 {
+							factors.push(i as i32);
+							//if bprint { println!("n = {}, istart = {}, itarget = {}, i = {}, factors = {:?}", n, istart, itarget, i, factors); }
+							self.backtrack_tinyvec(i, itarget / i, factors.clone());
+							factors.pop();
+						}
+						i += 1;
+					}
+				} else {
+					//let mut vecdivisors: Vec<u32> = self.divisor_gen(itarget);
+					let mut vecdivisors: Vec<u32> = divisors::get_divisors(itarget as u32);
+					//println!("vecdivisors({}) orig: {:?}", itarget, vecdivisors);
+					//vecdivisors.sort_unstable();
+					//println!("vecdivisors({}) sort: {:?}", itarget, vecdivisors);
+					if false {
+						vecdivisors.push(itarget as u32);
+					}
+					//let lastdivisor = *vecdivisors.get_unchecked(vecdivisors.len() - 1);
+					let lastfactor = if factors.len() > 0 { *factors.get_unchecked(factors.len() - 1) } else { 0 };
+					for idx in 0..vecdivisors.len() {
+						let idiv = *vecdivisors.get_unchecked(idx) as i32;
+						if idiv != lastfactor && (self.bln_gt_half || idiv != 2) {
+							factors.push(idiv);
+							//if bprint { println!("n = {}, istart = {}, itarget = {}, div = {}, factors = {:?}", n, istart, itarget, div, factors); }
+							self.backtrack_tinyvec(idiv, itarget / idiv, factors.clone());
+							factors.pop();
+						}
+					}
+					if true {
+						factors.push(itarget as i32);
+						self.backtrack_tinyvec(itarget, 1, factors.clone());
+						factors.pop();
+					}
+				}
+			}
+		}
     }
     
    return;
@@ -549,6 +691,9 @@ pub fn backtrack_vec(&mut self, istart: u32, itarget: u32, mut factors: Vec<u32>
         if (factors.len() >= self.min_factors_len && factors.len() <= self.max_factors_len) 
         {
             factors.sort_unstable();
+			if true && let Some(ref mut f) = self.backtrack_vec_file {
+				writeln!(f, "istart = {}, itarget = {}, factors = {:?}, factors_len = {}", istart, itarget, factors, factors.len());
+			}
             if (self.bln_gt_half || factors[0] != 2) && factors[0] != factors[1]
             {
                 let mut bappend: bool = true;
@@ -580,47 +725,52 @@ pub fn backtrack_vec(&mut self, istart: u32, itarget: u32, mut factors: Vec<u32>
         
     } else {
         
-        if unsafe { self.bitprimes.contains_unchecked(itarget as usize) } {
-            //println!("{} is prime", itarget);
-            factors.push(itarget);
-            self.backtrack_vec(itarget, 1, factors.clone());
-            factors.pop();
-        } else {
-            //let bprint: bool = true;
-            //let bprint: bool = itarget == 24 * 4373 || itarget == 1049520;
-            if self.exhaustive_search {
-                let mut i = istart;
-                while i * i <= itarget {
-                    if itarget % i == 0 {
-                        factors.push(i);
-                        //if bprint { println!("n = {}, istart = {}, itarget = {}, i = {}, factors = {:?}", n, istart, itarget, i, factors); }
-                        self.backtrack_vec(i, itarget / i, factors.clone());
-                        factors.pop();
-                    }
-                    i += 1;
-                }
-            } else {
-                //let mut vecdivisors: Vec<u32> = self.divisor_gen(itarget);
-				let mut vecdivisors: Vec<u32> = divisors::get_divisors(itarget);
-				//println!("vecdivisors({}) orig: {:?}", itarget, vecdivisors);
-                //vecdivisors.sort_unstable();
-				//println!("vecdivisors({}) sort: {:?}", itarget, vecdivisors);
-                if false {
-                    vecdivisors.push(itarget);
-                }
-                for div in &vecdivisors {
-                    if *div != vecdivisors[vecdivisors.len() - 1] {
-                        factors.push(*div);
-                        //if bprint { println!("n = {}, istart = {}, itarget = {}, div = {}, factors = {:?}", n, istart, itarget, div, factors); }
-                        self.backtrack_vec(*div, itarget / div, factors.clone());
-                        factors.pop();
-                    }
-                }
-                if true {
-                    factors.push(itarget);
-                    self.backtrack_vec(itarget, 1, factors.clone());
-                    factors.pop();
-                }
+		unsafe {
+			if self.bitprimes.contains_unchecked(itarget as usize) {
+				//println!("{} is prime", itarget);
+				factors.push(itarget);
+				self.backtrack_vec(itarget, 1, factors.clone());
+				factors.pop();
+			} else {
+				//let bprint: bool = true;
+				//let bprint: bool = itarget == 24 * 4373 || itarget == 1049520;
+				if self.exhaustive_search {
+					let mut i = istart;
+					while i * i <= itarget {
+						if itarget % i == 0 {
+							factors.push(i);
+							//if bprint { println!("n = {}, istart = {}, itarget = {}, i = {}, factors = {:?}", n, istart, itarget, i, factors); }
+							self.backtrack_vec(i, itarget / i, factors.clone());
+							factors.pop();
+						}
+						i += 1;
+					}
+				} else {
+					//let mut vecdivisors: Vec<u32> = self.divisor_gen(itarget);
+					let mut vecdivisors: Vec<u32> = divisors::get_divisors(itarget);
+					//println!("vecdivisors({}) orig: {:?}", itarget, vecdivisors);
+					//vecdivisors.sort_unstable();
+					//println!("vecdivisors({}) sort: {:?}", itarget, vecdivisors);
+					if false {
+						vecdivisors.push(itarget);
+					}
+					//let lastdivisor = *vecdivisors.get_unchecked(vecdivisors.len() - 1);
+					let lastfactor = if factors.len() > 0 { *factors.get_unchecked(factors.len() - 1) } else { 0 };
+					for vd in 0..vecdivisors.len() {
+						let div = *vecdivisors.get_unchecked(vd);
+						if div != lastfactor && (self.bln_gt_half || div != 2) {
+							factors.push(div);
+							//if bprint { println!("n = {}, istart = {}, itarget = {}, div = {}, factors = {:?}", n, istart, itarget, div, factors); }
+							self.backtrack_vec(div, itarget / div, factors.clone());
+							factors.pop();
+						}
+					}
+					if true {
+						factors.push(itarget);
+						self.backtrack_vec(itarget, 1, factors.clone());
+						factors.pop();
+					}
+				}
             }
         }
     }
@@ -634,29 +784,56 @@ n = 1049520, setvec2 = {[10, 24, 4373], [3, 40, 8746], [8, 15, 8746], [3, 20, 17
  */
 
 #[instrument]
-pub fn factor_combinations_ary(&mut self, i: u32) -> Vec<[u32; 24]>
+//pub fn factor_combinations_ary(&mut self, i: u32) -> SequenceVec<[[u32; 24]; 1024]>
+pub fn factor_combinations_ary(&mut self, i: u32) -> SequenceVec<[u32; 24]>
 {
     self.combinations_ary.clear();
     let mut factors: [u32; 24] = [0; 24];
-    self.backtrack_ary(2, i, &mut factors, 0);
+    self.backtrack_ary(2, i, factors, 0);
+	if self.combinations_ary.len() > self.max_combinations[self.max_combinations.len() - 1] {
+		self.max_combinations.push(self.combinations_ary.len());
+	}
     return self.combinations_ary.clone();
 }
 
 #[instrument]
-pub fn factor_combinations_tinyvec(&mut self, i: u32) -> Vec<TinyVec<[i32; 24]>>
+//pub fn factor_combinations_tinyvec(&mut self, i: u32) -> SequenceVec<[TinyVec<[i32; 24]>; 1024]>
+pub fn factor_combinations_tinyvec(&mut self, i: u32) -> SequenceVec<TinyVec<[i32; 24]>>
 {
+	//println!("factor_combinations_tinyvec(i = {})", i);
     self.combinations_tinyvec.clear();
-    let mut factors: TinyVec<[i32; 24]> = tiny_vec![0; 24];
+    let mut factors: TinyVec<[i32; 24]> = TinyVec::new();
     self.backtrack_tinyvec(2, i as i32, factors.clone());
+	if self.combinations_tinyvec.len() > self.max_combinations[self.max_combinations.len() - 1] {
+		self.max_combinations.push(self.combinations_tinyvec.len());
+	}
     return self.combinations_tinyvec.clone();
 }
 
 #[instrument]
-pub fn factor_combinations_vec(&mut self, i: u32) -> Vec<Vec<u32>>
+//pub fn factor_combinations_arrayvec(&mut self, i: u32) -> SequenceVec<[ArrayVec<[i32; 24]>; 1024]>
+pub fn factor_combinations_arrayvec(&mut self, i: u32) -> SequenceVec<ArrayVec<[i32; 24]>>
+{
+	//println!("factor_combinations_arrayvec(i = {})", i);
+    self.combinations_arrayvec.clear();
+    let mut factors: ArrayVec<[i32; 24]> = ArrayVec::new();
+    self.backtrack_arrayvec(2, i as i32, factors.clone());
+	if self.combinations_arrayvec.len() > self.max_combinations[self.max_combinations.len() - 1] {
+		self.max_combinations.push(self.combinations_arrayvec.len());
+	}
+    return self.combinations_arrayvec.clone();
+}
+
+#[instrument]
+//pub fn factor_combinations_vec(&mut self, i: u32) -> SequenceVec<[Vec<u32>; 1024]>
+pub fn factor_combinations_vec(&mut self, i: u32) -> SequenceVec<Vec<u32>>
 {
     self.combinations_vec.clear();
     let mut factors: Vec<u32> = Vec::<u32>::new();
     self.backtrack_vec(2, i, factors.clone());
+	if self.combinations_vec.len() > self.max_combinations[self.max_combinations.len() - 1] {
+		self.max_combinations.push(self.combinations_vec.len());
+	}
     return self.combinations_vec.clone();
 }
 
